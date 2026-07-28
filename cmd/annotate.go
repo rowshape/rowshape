@@ -51,9 +51,42 @@ func runAnnotate(verdictPath, summaryPath string) error {
 		return emitToolError(false, toolerror.New(toolerror.BadUsage, err.Error(), "pass a JSON verdict file or pipe `rowshape validate --json` into annotate"))
 	}
 
+	// A tool-error payload unmarshals CLEANLY into verdict.Result — every field
+	// it looks for is simply absent — so without this check annotate rendered a
+	// check summary headed by an empty verdict word. The payload marks itself
+	// with `"error":"tool_error"` for exactly this reason (see internal/toolerror:
+	// "a consumer branching on the JSON can tell them apart without heuristics"),
+	// so branch on it rather than inferring from a missing field.
+	var probe struct {
+		Error    string `json:"error"`
+		Category string `json:"category"`
+		Message  string `json:"message"`
+		Hint     string `json:"hint"`
+	}
+	if err := json.Unmarshal(data, &probe); err == nil && probe.Error == toolerror.Kind {
+		msg := probe.Message
+		if msg == "" {
+			msg = "rowshape could not produce a verdict"
+		}
+		hint := probe.Hint
+		if hint == "" {
+			hint = "annotate renders a verdict; this input reports that validate could not produce one"
+		}
+		cat := probe.Category
+		if cat == "" {
+			cat = string(toolerror.Internal)
+		}
+		return emitToolError(false, toolerror.New(toolerror.Category(cat), msg, hint))
+	}
+
 	var r verdict.Result
 	if err := json.Unmarshal(data, &r); err != nil {
 		return emitToolError(false, toolerror.New(toolerror.BadUsage, "input is not a JSON verdict: "+err.Error(), "annotate consumes the output of `rowshape validate --json`"))
+	}
+	// A document that is neither a verdict nor a tool error should not render as
+	// an empty-verdict summary either.
+	if r.Verdict == "" {
+		return emitToolError(false, toolerror.New(toolerror.BadUsage, "input has no verdict field", "annotate consumes the output of `rowshape validate --json`"))
 	}
 
 	annotate.WriteAnnotations(os.Stdout, r)

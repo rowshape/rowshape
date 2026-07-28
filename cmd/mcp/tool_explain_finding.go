@@ -7,6 +7,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/rowshape/rowshape/internal/findings"
+	"github.com/rowshape/rowshape/internal/toolerror"
 )
 
 // explain_finding is remediation without a web search (PRD §8.2): an agent that
@@ -18,7 +19,7 @@ func handleExplainFinding(_ context.Context, _ *sdk.CallToolRequest, in explainF
 	code := strings.ToUpper(strings.TrimSpace(in.Code))
 	e, ok := findings.Explain(code)
 	if !ok {
-		return errorResult(fmt.Sprintf("unknown finding code %q; known codes: %s", code, strings.Join(findings.Codes(), ", "))), nil, nil
+		return errorText(toolerror.BadUsage, fmt.Sprintf("unknown finding code %q", code), "known codes: "+strings.Join(findings.Codes(), ", ")), nil, nil
 	}
 	summary := fmt.Sprintf("%s — %s\nRemediation: %s", e.Code, e.Title, e.Remediation)
 	return textResult(summary), e, nil

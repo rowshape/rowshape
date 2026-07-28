@@ -145,7 +145,7 @@ func TestPlanDryRunAppliesNothing(t *testing.T) {
 	writeFile(t, mig, "ALTER TABLE public.t ADD COLUMN c int;")
 
 	stdout, stderr := captureOutput(t, func() error {
-		return runPlan(&planOptions{against: url, migrations: mig})
+		return runPlan(context.Background(), &planOptions{against: url, migrations: mig})
 	})
 	if !strings.Contains(stdout, "add column t.c") {
 		t.Errorf("plan output should describe the add-column diff, got:\n%s\nstderr:\n%s", stdout, stderr)
@@ -177,7 +177,7 @@ tables:
 `)
 	var runErr error
 	stdout, _ := captureOutput(t, func() error {
-		runErr = runVerify(&verifyOptions{against: url, fixturePath: fx})
+		runErr = runVerify(context.Background(), &verifyOptions{against: url, fixturePath: fx})
 		return runErr
 	})
 	if !strings.Contains(stdout, "users.phone") || !strings.Contains(stdout, "DRIFT") {
@@ -214,7 +214,7 @@ tables:
 `)
 	var runErr error
 	stdout, stderr := captureOutput(t, func() error {
-		runErr = runVerify(&verifyOptions{against: url, fixturePath: fx})
+		runErr = runVerify(context.Background(), &verifyOptions{against: url, fixturePath: fx})
 		return runErr
 	})
 	if !strings.Contains(stdout, "matches intent") {

@@ -3,6 +3,8 @@ package fixture
 import (
 	"bytes"
 	"fmt"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -114,6 +116,26 @@ func ParseVerified(data []byte) (*Fixture, error) {
 		return nil, fmt.Errorf("recomputing the fixture digest: %w", err)
 	}
 	if got != f.Meta.Digest {
+		// Distinguish a TAMPER from a FORWARD-COMPATIBILITY drop before accusing
+		// anyone of editing the file.
+		//
+		// ParseVerified recomputes the digest from the PARSED STRUCT, and parsing
+		// silently discards keys this build does not know (pruneExtensions). So a
+		// fixture written by a newer rowshape — carrying a field added since —
+		// digests over that field at emit, loses it here, and hashes differently.
+		// The old message called that "the file was modified after `rowshape
+		// pull`", which is simply false: nobody edited anything, and its advice
+		// (re-run pull, or delete meta.digest) is wrong for that case.
+		if dropped := droppedKeys(data); len(dropped) > 0 {
+			return nil, fmt.Errorf(
+				"fixture digest mismatch, and this build did not understand %d field(s) in the file: %s\n"+
+					"  meta.digest claims: %s\n"+
+					"  content hashes to:  %s\n"+
+					"This looks like a fixture written by a NEWER rowshape rather than an edited one — the "+
+					"unknown fields were part of what it digested, and this build dropped them. Upgrade "+
+					"rowshape, or re-run `rowshape pull` with this build to regenerate the fixture.",
+				len(dropped), strings.Join(dropped, ", "), f.Meta.Digest, got)
+		}
 		return nil, fmt.Errorf(
 			"fixture digest mismatch: the file was modified after `rowshape pull`\n"+
 				"  meta.digest claims: %s\n"+
@@ -122,4 +144,67 @@ func ParseVerified(data []byte) (*Fixture, error) {
 			f.Meta.Digest, got)
 	}
 	return f, nil
+}
+
+// droppedKeys reports YAML keys present in the raw document that this build's
+// model does not carry, sorted and de-duplicated.
+//
+// It exists to tell "someone edited this fixture" apart from "this fixture came
+// from a newer rowshape". Both produce the same symptom — a digest mismatch —
+// and they want opposite advice.
+//
+// It walks the raw document and the re-marshalled parsed struct in parallel, so
+// it reports what parsing ACTUALLY lost rather than inferring from the version
+// string: a newer build might add a field without bumping a minor, and the
+// fixture would still fail here.
+//
+// x_-prefixed vendor extensions are excluded, since those are preserved by
+// design (RFC §12) and their presence is not evidence of anything.
+func droppedKeys(raw []byte) []string {
+	var before, after map[string]any
+	if err := yaml.Unmarshal(raw, &before); err != nil {
+		return nil
+	}
+	var f Fixture
+	if err := yaml.Unmarshal(raw, &f); err != nil {
+		return nil
+	}
+	out, err := yaml.Marshal(&f)
+	if err != nil {
+		return nil
+	}
+	if err := yaml.Unmarshal(out, &after); err != nil {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	var missing []string
+	var walk func(a, b map[string]any, path string)
+	walk = func(a, b map[string]any, path string) {
+		for k, av := range a {
+			if strings.HasPrefix(k, "x_") {
+				continue
+			}
+			full := k
+			if path != "" {
+				full = path + "." + k
+			}
+			bv, present := b[k]
+			if !present {
+				if !seen[full] {
+					seen[full] = true
+					missing = append(missing, full)
+				}
+				continue
+			}
+			am, aok := av.(map[string]any)
+			bm, bok := bv.(map[string]any)
+			if aok && bok {
+				walk(am, bm, full)
+			}
+		}
+	}
+	walk(before, after, "")
+	sort.Strings(missing)
+	return missing
 }

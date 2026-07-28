@@ -1,0 +1,10 @@
+{
+  "description": "Two exclusive-lock statements on one table — RS-LOCK-011 WARN. Combining them into one ALTER TABLE takes the lock once.",
+  "verdict": "WARN",
+  "findings": [
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
+  ]
+}

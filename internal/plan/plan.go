@@ -9,9 +9,11 @@ package plan
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/rowshape/rowshape/internal/dsn"
 	"github.com/rowshape/rowshape/internal/fixture"
 	"github.com/rowshape/rowshape/internal/profile"
 	"github.com/rowshape/rowshape/internal/sqlkind"
@@ -34,9 +36,25 @@ func ReadLiveSchema(ctx context.Context, url string) (*fixture.Fixture, error) {
 	if url == "" {
 		return nil, fmt.Errorf("no target given")
 	}
-	conn, err := pgx.Connect(ctx, url)
+	cfg, err := pgx.ParseConfig(url)
 	if err != nil {
-		return nil, fmt.Errorf("connect to target failed")
+		// Deliberately does not echo the URL: it may carry a password.
+		return nil, fmt.Errorf("could not parse the connection settings")
+	}
+	if w := dsn.InsecureWarning(cfg); w != "" {
+		fmt.Fprintf(os.Stderr, "rowshape: warning: %s\n", w)
+	}
+	// plan/verify read a LIVE target, frequently the production one, so the lock
+	// and idle-transaction limits matter most here. The statement limit stays
+	// unset (ReadDefaults): a catalog read on a very large schema is slow but
+	// legitimate, and failing it halfway serves nobody.
+	dsn.Apply(cfg, dsn.ReadDefaults)
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		// Classified, never the driver's text: pgx embeds the host, port, user
+		// and database in its dial errors.
+		class, hint := dsn.ClassifyConnect(err)
+		return nil, fmt.Errorf("connect to target failed: %s (%s)", class, hint)
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	f, err := profile.ReadStructure(ctx, conn, profile.Options{})
@@ -135,11 +153,27 @@ func existsNote(exists bool) string {
 // The search is bounded to the authority so an "@" in a path or query string is
 // not mistaken for a credential separator, which would corrupt the URL it is
 // supposed to be merely displaying.
+// pgx accepts two DSN spellings and so must this: the URL form handled below,
+// and libpq's keyword/value form ("host=h user=u password=p"), which has no
+// "://" and whose password would otherwise be returned verbatim.
 func RedactURL(url string) string {
-	s := strings.Index(url, "://")
-	if s < 0 {
-		return url
+	// Dispatch on the SCHEME PREFIX, not on "://" appearing anywhere.
+	//
+	// The first cut of this tested `strings.Index(url, "://") < 0` to pick the
+	// keyword/value branch, which meant any keyword/value DSN carrying "://"
+	// inside a value took the URL branch instead — found no "@" in what it
+	// treated as the authority, and returned the input VERBATIM:
+	//
+	//	host=db.prod password=hunter2 options='-c foo=bar://baz'   (unchanged)
+	//	host=db password=ab://cd                                   (unchanged)
+	//
+	// i.e. the exact leak this function exists to prevent, on a realistic input.
+	// libpq URIs must BEGIN with one of these two schemes, so anchoring the test
+	// is both correct and unambiguous.
+	if !strings.HasPrefix(url, "postgres://") && !strings.HasPrefix(url, "postgresql://") {
+		return redactKeywordValue(url)
 	}
+	s := strings.Index(url, "://")
 	start := s + 3
 
 	// The authority runs to the first "/", "?", or "#" after the scheme.
@@ -157,6 +191,85 @@ func RedactURL(url string) string {
 		return url
 	}
 	return url[:start] + "…@" + url[start+at+1:]
+}
+
+// redactKeywordValue strips the password from a libpq keyword/value DSN, the
+// form pgx.ParseConfig accepts alongside URLs:
+//
+//	host=db user=svc password=hunter2 sslmode=require  ->  host=db user=svc password=… sslmode=require
+//
+// Values may be single-quoted and may contain backslash escapes, so the scan
+// follows libpq's own quoting rules rather than splitting on whitespace — a
+// password of 'a b c' is one value, not three.
+//
+// It scans instead of regex-replacing so that a literal "password=" appearing
+// INSIDE another value (an options= string, say) cannot be mistaken for a
+// keyword. Anything unparseable is passed through as a keyword with no value,
+// which cannot expose a password because a password only ever appears as the
+// value of the password keyword.
+func redactKeywordValue(raw string) string {
+	var b strings.Builder
+	i := 0
+	for i < len(raw) {
+		// Whitespace between pairs is preserved verbatim.
+		if isSpace(raw[i]) {
+			b.WriteByte(raw[i])
+			i++
+			continue
+		}
+		// Keyword: up to "=" or whitespace.
+		ks := i
+		for i < len(raw) && raw[i] != '=' && !isSpace(raw[i]) {
+			i++
+		}
+		keyword := raw[ks:i]
+		b.WriteString(keyword)
+		// Optional space, "=", optional space.
+		for i < len(raw) && isSpace(raw[i]) {
+			b.WriteByte(raw[i])
+			i++
+		}
+		if i >= len(raw) || raw[i] != '=' {
+			continue // a bare token with no value; nothing to redact
+		}
+		b.WriteByte('=')
+		i++
+		for i < len(raw) && isSpace(raw[i]) {
+			b.WriteByte(raw[i])
+			i++
+		}
+		// Value: single-quoted (with backslash escapes) or bare.
+		vs := i
+		if i < len(raw) && raw[i] == '\'' {
+			i++
+			for i < len(raw) && raw[i] != '\'' {
+				if raw[i] == '\\' && i+1 < len(raw) {
+					i++
+				}
+				i++
+			}
+			if i < len(raw) {
+				i++ // closing quote
+			}
+		} else {
+			for i < len(raw) && !isSpace(raw[i]) {
+				if raw[i] == '\\' && i+1 < len(raw) {
+					i++
+				}
+				i++
+			}
+		}
+		if strings.EqualFold(keyword, "password") {
+			b.WriteString("…")
+		} else {
+			b.WriteString(raw[vs:i])
+		}
+	}
+	return b.String()
+}
+
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
 func collapse(s string) string { return strings.Join(strings.Fields(s), " ") }

@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/rowshape/rowshape/internal/dsn"
 )
 
 // Target is a database hydrate materializes rows into.
@@ -31,16 +32,30 @@ type Target interface {
 
 // Provided wraps a user-supplied database URL (`hydrate --target <url>`). It is
 // not disposable — Close never drops the database.
+//
+// The field is `url`, not `dsn`, so it cannot shadow the internal/dsn package
+// inside these methods.
 type Provided struct {
-	dsn string
+	url string
 }
 
 // NewProvided returns a Target for a user-supplied connection string.
-func NewProvided(dsn string) *Provided { return &Provided{dsn: dsn} }
+func NewProvided(url string) *Provided { return &Provided{url: url} }
 
 // Connect opens a connection to the provided database.
+//
+// This is the LIVE `--target` path — the one path in the product that writes to
+// a database the user nominated rather than one rowshape created — so the lock
+// timeout matters more here than anywhere else: rowshape must never sit in a
+// lock queue on someone's real database waiting behind a migration or a long
+// transaction. Failing fast is strictly better than blocking.
 func (p *Provided) Connect(ctx context.Context) (*pgx.Conn, error) {
-	return pgx.Connect(ctx, p.dsn)
+	cfg, err := pgx.ParseConfig(p.url)
+	if err != nil {
+		return nil, fmt.Errorf("parse target connection: %w", err)
+	}
+	dsn.Apply(cfg, dsn.ReadDefaults)
+	return pgx.ConnectConfig(ctx, cfg)
 }
 
 // Disposable is always false for a user-provided database.
@@ -70,6 +85,11 @@ func NewEphemeral(ctx context.Context, adminDSN string) (*Ephemeral, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse admin connection: %w", err)
 	}
+	// The admin connection creates and drops databases; a connect that hangs
+	// here strands the whole run before it has begun, and an idle transaction on
+	// an admin role is worth bounding. The statement limit stays unset: hydrate
+	// legitimately issues long COPYs into the disposable database.
+	dsn.Apply(adminCfg, dsn.ReadDefaults)
 	admin, err := pgx.ConnectConfig(ctx, adminCfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect to admin database: %w", err)

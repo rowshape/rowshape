@@ -34,14 +34,19 @@ func (rsData) Analyze(f *fixture.Fixture, c *validate.Capture) []verdict.Finding
 		clean := collapseSpaces(stripSQLComments(st.SQL))
 		upper := strings.ToUpper(clean)
 
-		switch {
-		case strings.Contains(upper, "UNIQUE") && strings.Contains(upper, "ADD"):
+		// Independent ifs, not a switch. One ALTER TABLE can legitimately do both
+		// — `ADD CONSTRAINT u UNIQUE (c), ALTER COLUMN c SET NOT NULL` — and a
+		// switch reported only the first, silently dropping a real finding about
+		// the second. (The "never double-flag" note below is about UNIQUE vs the
+		// RS-INDEX family, which is a different concern and still holds.)
+		if strings.Contains(upper, "UNIQUE") && strings.Contains(upper, "ADD") {
 			// ADD CONSTRAINT UNIQUE (the constraint form). CREATE UNIQUE INDEX is
 			// RS-INDEX's, so the two families never double-flag one statement.
 			if fnd, ok := uniqueFinding(f, clean, upper); ok {
 				out = append(out, fnd)
 			}
-		case strings.Contains(upper, "SET NOT NULL"):
+		}
+		if strings.Contains(upper, "SET NOT NULL") {
 			if fnd, ok := notNullFinding(f, clean, upper); ok {
 				out = append(out, fnd)
 			}

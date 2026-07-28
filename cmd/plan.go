@@ -31,8 +31,8 @@ func newPlanCmd() *cobra.Command {
 		Long: "plan reads a live target's current schema (read-only) and reports what\n" +
 			"each migration statement would change against it — a dry run that applies\n" +
 			"nothing. Point --against at the target and -m at a .sql file or directory.",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runPlan(opts)
+		RunE: func(c *cobra.Command, _ []string) error {
+			return runPlan(c.Context(), opts)
 		},
 	}
 	f := cmd.Flags()
@@ -42,8 +42,7 @@ func newPlanCmd() *cobra.Command {
 	return cmd
 }
 
-func runPlan(opts *planOptions) error {
-	ctx := context.Background()
+func runPlan(ctx context.Context, opts *planOptions) error {
 
 	stmts, err := migrationStatements(opts.migrations)
 	if err != nil {

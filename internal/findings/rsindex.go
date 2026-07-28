@@ -52,7 +52,7 @@ func (rsIndex) Analyze(f *fixture.Fixture, c *validate.Capture) []verdict.Findin
 			if isTable {
 				name = resolveTable(f, name)
 			}
-			if fnd, ok := reindexFinding(f, name, isTable); ok {
+			if fnd, ok := reindexFinding(f, name, isTable, hasVersion); ok {
 				out = append(out, fnd)
 			}
 		}
@@ -155,26 +155,64 @@ func partialWhere(predicate string) string {
 
 // reindexFinding flags a non-concurrent REINDEX and buckets its duration from the
 // index's on-disk bytes/bloat (RFC §6.5).
-func reindexFinding(f *fixture.Fixture, name string, isTable bool) (verdict.Finding, bool) {
+func reindexFinding(f *fixture.Fixture, name string, isTable bool, hasVersion bool) (verdict.Finding, bool) {
 	table, idx, ok := findIndex(f, name, isTable)
 	if !ok {
 		return verdict.Finding{}, false
 	}
 	bytes := idx.Bytes
-	bloat := 0.0
+
+	// An ABSENT bloat estimate must not render as a measured 0%.
+	//
+	// bloat_estimate has no emitter anywhere: internal/profile contains no bloat,
+	// n_dead_tup or pgstattuple query, so on every fixture a real `rowshape pull`
+	// produces the field is nil. Defaulting it to 0.0 meant every REINDEX finding
+	// asserted "bloat estimate 0%" — the exact opposite of the condition that
+	// motivates a REINDEX — and put bloat_estimate:0 into the EVIDENCE map, which
+	// is part of the Verdict, and the Verdict is shaped as a signable in-toto
+	// predicate. A number nobody measured, presented as a measurement, inside a
+	// document meant to be attested.
+	//
+	// Absent now means absent: omitted from the text and from the evidence. The
+	// finding stands on the bytes, which ARE measured.
+	detail := fmt.Sprintf("REINDEX rewrites the whole index (%d bytes) while holding a lock that blocks writes.", bytes)
+	evidence := map[string]any{"index_bytes": bytes}
 	if idx.BloatEstimate != nil {
-		bloat = *idx.BloatEstimate
+		detail = fmt.Sprintf("REINDEX rewrites the whole index (%d bytes, bloat estimate %.0f%%) while holding a lock that blocks writes.", bytes, *idx.BloatEstimate*100)
+		evidence["bloat_estimate"] = *idx.BloatEstimate
 	}
+
 	fnd := verdict.Finding{
-		Code:        "RS-INDEX-020",
-		Severity:    verdict.SeverityWarn,
-		Title:       fmt.Sprintf("Non-concurrent REINDEX of %s rebuilds under lock (%s)", name, estimate.BucketFromBytes(bytes)),
-		Detail:      fmt.Sprintf("REINDEX rewrites the whole index (%d bytes, bloat estimate %.0f%%) while holding a lock that blocks writes.", bytes, bloat*100),
-		Evidence:    map[string]any{"index_bytes": bytes, "bloat_estimate": bloat},
-		DependsOn:   []string{table + ".rows"},
-		Estimate:    &verdict.Estimate{Bucket: estimate.BucketFromBytes(bytes), Model: "reindex_bytes"},
+		Code:     "RS-INDEX-020",
+		Severity: verdict.SeverityWarn,
+		Title:    fmt.Sprintf("Non-concurrent REINDEX of %s rebuilds under lock (%s)", name, estimate.BucketFromBytes(bytes)),
+		Detail:   detail,
+		Evidence: evidence,
+		// The index's BYTES, not the table's rows. This estimate is derived
+		// entirely from idx.Bytes via a throughput constant; citing table.rows
+		// put a fact the conclusion does not rest on into a signed document —
+		// the same false-provenance trail indexUniqueFinding above explicitly
+		// refuses to leave.
+		DependsOn:   []string{table + ".indexes." + idx.Name + ".bytes"},
 		Remediation: remediation("RS-INDEX-020"),
 		Explain:     "rowshape explain RS-INDEX-020",
+	}
+
+	// RFC §9.1: refuse to extrapolate without engine.version. This analyzer built
+	// its Estimate literal directly instead of going through estimateFor, so it
+	// skipped the gate that CR-T21 consolidated into ONE enforcement point
+	// precisely so a later analyzer could not forget it — and then a later
+	// analyzer forgot it. The gate cannot live in estimateFor for this finding
+	// (that function extrapolates from a MEASURED basis, while this cost model
+	// reads a fixture fact), so it is enforced here explicitly.
+	//
+	// The finding still stands without the estimate: a non-concurrent REINDEX
+	// holds its lock regardless of how long it takes, and an absent dependency
+	// caps the verdict to WARN.
+	if hasVersion {
+		fnd.Estimate = &verdict.Estimate{Bucket: estimate.BucketFromBytes(bytes), Model: "reindex_bytes"}
+	} else {
+		fnd.Title = fmt.Sprintf("Non-concurrent REINDEX of %s rebuilds under lock", name)
 	}
 	return fnd, true
 }
@@ -195,7 +233,12 @@ func findIndex(f *fixture.Fixture, name string, isTable bool) (string, fixture.I
 		}
 		return name, big, true
 	}
-	for tname, tbl := range f.Tables {
+	// Sorted, not map order. Postgres permits the same index name in two
+	// schemas, so an unsorted scan returned an arbitrary one of them — and the
+	// table name it returns feeds the finding's DependsOn, making the recorded
+	// provenance unstable too.
+	for _, tname := range sortedTableNames(f) {
+		tbl := f.Tables[tname]
 		for _, ix := range tbl.Indexes {
 			if strings.EqualFold(ix.Name, name) {
 				return tname, ix, true

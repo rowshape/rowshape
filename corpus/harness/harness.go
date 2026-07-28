@@ -23,9 +23,15 @@ import (
 )
 
 // KnownCodes are the permanent, namespaced finding codes (INV-VERDICT-STABLE).
+// It is a deliberate hand-maintained list rather than a derived one: the corpus
+// is the thing that checks the catalog, so deriving its vocabulary FROM the
+// catalog would let a typo in a new code validate itself. TestKnownCodesMatchRegistry
+// guards the other direction — that a family added to the registry is not
+// forgotten here.
 var KnownCodes = map[string]bool{
 	"RS-LOCK": true, "RS-DATA": true, "RS-CONSTRAINT": true,
 	"RS-INDEX": true, "RS-PERF": true, "RS-REVERSE": true,
+	"RS-DEPLOY": true, "RS-TX": true,
 }
 
 // KnownVerdicts are the three verdict values (PRD §10).

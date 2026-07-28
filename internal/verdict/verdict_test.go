@@ -1,7 +1,10 @@
 package verdict
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -241,5 +244,61 @@ func TestRemediationRequiredOnError(t *testing.T) {
 	// An unknown verdict is rejected.
 	if err := (Result{Verdict: "MAYBE"}).Validate(); err == nil {
 		t.Error("Validate accepted an unknown verdict")
+	}
+}
+
+// TestStatementSubjectDigestsRawBytes pins that the subject digest is over the
+// artifact's ACTUAL bytes.
+//
+// An earlier change folded CRLF to LF here, to stop a Windows checkout digesting
+// the same commit differently from a Linux runner. The observation was right and
+// the fix was wrong: an in-toto subject digest is DEFINED as the digest of the
+// artifact, so normalizing means `sha256sum migrations/001.sql` never matches the
+// attested value and every standard verifier fails against the very file the
+// subject names. The portability problem belongs in .gitattributes, where it can
+// be solved without breaking verification.
+//
+// This test exists to stop the plausible-sounding fix being reapplied.
+func TestStatementSubjectDigestsRawBytes(t *testing.T) {
+	// Built from bytes rather than a quoted literal: the point is the exact
+	// sequence, and spelling it out removes any doubt about what is being hashed.
+	crlf := []byte("ALTER TABLE t\r\nADD COLUMN c int;\r\n")
+	contents := crlf
+
+	var r Result
+	got := r.Statement([]MigrationFile{{Path: "migrations/001.sql", Contents: contents}})
+	if len(got.Subject) != 1 {
+		t.Fatalf("want one subject, got %d", len(got.Subject))
+	}
+
+	sum := sha256.Sum256(contents) // the bytes as they are, not normalized
+	want := hex.EncodeToString(sum[:])
+	if g := got.Subject[0].Digest["sha256"]; g != want {
+		t.Errorf("subject digest = %s, want the digest of the RAW bytes %s — a verifier running "+
+			"sha256sum on the file must get the attested value", g, want)
+	}
+
+	// And the CRLF and LF forms must therefore DIFFER: they are different files.
+	lfBytes := []byte("ALTER TABLE t\nADD COLUMN c int;\n")
+	lf := r.Statement([]MigrationFile{{Path: "migrations/001.sql", Contents: lfBytes}})
+	if lf.Subject[0].Digest["sha256"] == got.Subject[0].Digest["sha256"] {
+		t.Error("CRLF and LF contents are different bytes and must digest differently; " +
+			"equal digests mean normalization crept back in")
+	}
+}
+
+// Subject names must be slash-separated so one migration names one subject on
+// every OS; a Windows path would otherwise read `migrations\001.sql`.
+func TestStatementSubjectNameIsSlashed(t *testing.T) {
+	var r Result
+	s := r.Statement([]MigrationFile{{
+		Path:     filepath.Join("migrations", "001.sql"),
+		Contents: []byte("SELECT 1;"),
+	}})
+	if len(s.Subject) != 1 {
+		t.Fatalf("want one subject, got %d", len(s.Subject))
+	}
+	if got := s.Subject[0].Name; got != "migrations/001.sql" {
+		t.Errorf("subject name = %q, want %q", got, "migrations/001.sql")
 	}
 }

@@ -67,7 +67,7 @@ func runValidateCase(t *testing.T, admin, caseName string, warnFail bool) int {
 		warnFail:    warnFail,
 	}
 	var runErr error
-	_, stderr := captureOutput(t, func() error { runErr = runValidate(opts); return runErr })
+	_, stderr := captureOutput(t, func() error { runErr = runValidate(context.Background(), opts); return runErr })
 	code := exitCodeOf(runErr)
 	if code == -1 {
 		t.Fatalf("runValidate(%s) returned a non-exit error: %v\nstderr:\n%s", caseName, runErr, stderr)

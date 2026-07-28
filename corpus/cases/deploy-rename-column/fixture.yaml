@@ -1,0 +1,13 @@
+rowshape_fixture: "1"
+meta:
+  id: deploy-rename-column
+  engine: {name: postgres, version: "16"}
+  privacy: standard
+  profile: {mode: fast, escalated: []}
+tables:
+  public.users:
+    rows: {value: 5000000, confidence: exact}
+    columns:
+      id: {type: bigint, nullable: false, unique: {value: true, confidence: exact, via: constraint}}
+      email: {type: text, nullable: false}
+    constraints: [{name: users_pkey, kind: primary_key, columns: [id]}]

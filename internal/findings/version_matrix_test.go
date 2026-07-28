@@ -1,7 +1,6 @@
 package findings
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/rowshape/rowshape/internal/fixture"
@@ -40,12 +39,34 @@ func TestVersionMatrixAddColumnDefault(t *testing.T) {
 			if res.Verdict != expect {
 				t.Errorf("PG %s: verdict = %s, want %s", major, res.Verdict, expect)
 			}
-			if major == "10" {
-				if len(res.Findings) != 1 || !strings.HasPrefix(res.Findings[0].Code, "RS-LOCK") {
-					t.Errorf("PG 10 must carry exactly one RS-LOCK finding, got %+v", res.Findings)
+			// The claim under test is the version-conditional REWRITE: RS-LOCK-001
+			// must fire on PG 10 and must not on PG 11+. This originally asserted
+			// "exactly one finding", which was a proxy for that — and a fragile
+			// one: RS-LOCK-010 (no lock_timeout on a lock-holding migration) is
+			// also correct on PG 10, additive, and true. Assert the specific code
+			// rather than a count, so a genuinely new finding does not read as a
+			// regression in the version model.
+			hasRewrite := false
+			for _, fnd := range res.Findings {
+				if fnd.Code == "RS-LOCK-001" {
+					hasRewrite = true
 				}
-			} else if len(res.Findings) != 0 {
-				t.Errorf("PG %s must produce no findings (catalog fast-path), got %+v", major, res.Findings)
+			}
+			if major == "10" {
+				if !hasRewrite {
+					t.Errorf("PG 10 must report the full-table rewrite (RS-LOCK-001), got %+v", res.Findings)
+				}
+			} else {
+				if hasRewrite {
+					t.Errorf("PG %s must NOT report a rewrite — the catalog fast-path landed in 11, got %+v", major, res.Findings)
+				}
+				// The fast path is instant, so nothing that depends on the lock
+				// being HELD should fire either.
+				for _, fnd := range res.Findings {
+					if fnd.Code == "RS-LOCK-010" || fnd.Code == "RS-LOCK-011" {
+						t.Errorf("PG %s: catalog-only DDL must not raise lock-duration findings, got %s", major, fnd.Code)
+					}
+				}
 			}
 		})
 	}

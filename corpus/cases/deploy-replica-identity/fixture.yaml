@@ -1,0 +1,13 @@
+rowshape_fixture: "1"
+meta:
+  id: deploy-replica-identity
+  engine: {name: postgres, version: "16"}
+  privacy: standard
+  profile: {mode: fast, escalated: []}
+tables:
+  public.events:
+    rows: {value: 20000000, confidence: exact}
+    columns:
+      id: {type: bigint, nullable: false, unique: {value: true, confidence: exact, via: constraint}}
+      note: {type: text, nullable: false}
+    constraints: [{name: events_pkey, kind: primary_key, columns: [id]}]

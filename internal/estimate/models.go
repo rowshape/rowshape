@@ -148,7 +148,11 @@ func predictMs(m Model, basisRows, basisMs, declaredRows int64) float64 {
 // to bucket a REINDEX from the index's on-disk size, since a rebuild's cost is
 // dominated by writing the index out (RFC §6.5). It is a defensible
 // order-of-magnitude constant, not a stopwatch.
-const reindexBytesPerMs = 50 * 1024 * 1024 / 1000
+// The .0 is load-bearing: written as `50 * 1024 * 1024 / 1000` this is an
+// untyped INTEGER constant expression, so the division truncates to 52428
+// rather than 52428.8 — a silent 0.0015% error in a constant whose whole
+// purpose is to be a defensible round number.
+const reindexBytesPerMs = 50 * 1024 * 1024 / 1000.0
 
 // BucketFromBytes buckets an index rebuild by its on-disk size in bytes — the
 // basis for a REINDEX, whose work scales with the (possibly bloated) index size

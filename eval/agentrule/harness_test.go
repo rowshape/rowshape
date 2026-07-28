@@ -70,9 +70,24 @@ func TestScoreNoValidateBeforePR(t *testing.T) {
 	}
 }
 
-// TestWeakenedRuleScoresLower is the A/B assertion (P4-T8 criterion 3): the
-// committed trace fixtures show the v2 rule's sessions score strictly higher on
-// both adherence and loop closure than a deliberately weakened rule's.
+// TestWeakenedRuleScoresLower checks that the SCORER ranks an adherent session
+// above a non-adherent one.
+//
+// It is NOT an A/B of the rule, despite the name and despite P4-T8 criterion 3
+// describing it that way. This package never loads internal/agentrule, and the
+// `rule_version` field is parsed into Session and then read by nothing — so the
+// two arms are simply four hand-authored fixtures, two written to score well and
+// two written to score badly. This test would pass byte-for-byte if rule.md were
+// emptied, deleted, or replaced with its own negation.
+//
+// What it genuinely pins is Score(): that skipping describe_shape, opening a PR
+// on a WARN, and never reaching PASS all cost points, in the direction they
+// should. That is worth having. Measuring the RULE needs the live trace runner
+// described in README.md, which does not exist in this repo yet.
+//
+// Note also that the assertions below pin exact outcomes (adherence 1.0 / 0-ish,
+// closure 1 / 0). Real traces carry variance, so this test would have to relax
+// before it could consume any.
 func TestWeakenedRuleScoresLower(t *testing.T) {
 	sessions, err := LoadSessions("traces")
 	if err != nil {

@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/rowshape/rowshape/internal/dsn"
 	"github.com/rowshape/rowshape/internal/fixture"
 	"github.com/rowshape/rowshape/internal/profile"
+	"github.com/rowshape/rowshape/internal/rlog"
 	"github.com/rowshape/rowshape/internal/verdict"
 	"github.com/spf13/cobra"
 )
@@ -22,6 +24,7 @@ type pullOptions struct {
 	iKnow             bool
 	maxEscalationRows int64
 	exact             bool
+	statementTimeout  time.Duration
 }
 
 // newPullCmd reads production shape read-only and emits a committable
@@ -56,6 +59,8 @@ func newPullCmd() *cobra.Command {
 	f.BoolVar(&opts.iKnow, "i-know", false, "override the refusal to run as a superuser")
 	f.Int64Var(&opts.maxEscalationRows, "max-escalation-rows", opts.maxEscalationRows,
 		"skip uniqueness escalation on tables larger than this (0 = default, negative = no cap)")
+	f.DurationVar(&opts.statementTimeout, "statement-timeout", 0,
+		"server-side cap on any single query (0 = the mode default: 10m in fast mode, none with --exact)")
 	f.BoolVar(&opts.exact, "exact", false, "full streaming pass: exact null counts and measured (HLL) distinct for every column (minutes to hours)")
 	return cmd
 }
@@ -80,12 +85,35 @@ func runPull(ctx context.Context, opts *pullOptions) error {
 		return toolError()
 	}
 	host := cfg.Host
+	if w := dsn.InsecureWarning(cfg); w != "" {
+		fmt.Fprintf(os.Stderr, "rowshape pull: warning: %s\n", w)
+	}
 
+	// Fast mode gets a statement cap; --exact deliberately does not. --exact is
+	// documented as a full streaming pass taking "minutes to hours", so capping
+	// it would break the mode's whole purpose — a slow-but-correct run would
+	// become a mysterious partial failure. --statement-timeout overrides either.
+	limits := dsn.ScanDefaults
+	if opts.exact {
+		limits.Statement = 0
+	}
+	if opts.statementTimeout != 0 {
+		limits.Statement = opts.statementTimeout
+	}
+	dsn.Apply(cfg, limits)
+
+	rlog.Debug("connecting", "host", host, "database", cfg.Database, "user", cfg.User, "tls", cfg.TLSConfig != nil)
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
-		// Never surface the DSN — it may carry a password. Report only that the
-		// connection failed.
-		fmt.Fprintln(os.Stderr, "rowshape pull: could not connect to the database (check your connection settings)")
+		// Never surface the DSN — it may carry a password. But "it failed" alone
+		// was not actionable either: an operator could not tell a typo'd host from
+		// a wrong password from an expired certificate. Report rowshape's OWN
+		// classification of the failure, never the driver's text.
+		class, hint := dsn.ClassifyConnect(err)
+		fmt.Fprintf(os.Stderr, "rowshape pull: could not connect to the database: %s\n", class)
+		if hint != "" {
+			fmt.Fprintf(os.Stderr, "rowshape pull: %s\n", hint)
+		}
 		return toolError()
 	}
 	defer func() { _ = conn.Close(ctx) }()

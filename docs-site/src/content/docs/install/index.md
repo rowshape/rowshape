@@ -63,15 +63,35 @@ The `rowshape/rowshape` GitHub Action wraps this for you — see the
 ## Supply chain
 
 Every release ships an [SBOM](https://en.wikipedia.org/wiki/Software_supply_chain)
-(SPDX, one per archive) and a cosign signature. You can verify a downloaded
-artifact against its signature before trusting it:
+(SPDX, one per archive), a `checksums.txt`, and a cosign keyless signature over
+that checksums file.
+
+**You do not have to do this by hand.** The GitHub Action and the npm installer
+both verify the archive against `checksums.txt` automatically and refuse to run
+a binary that does not match. See the
+[GitHub Action guide](https://github.com/rowshape/rowshape/blob/main/docs/action.md)
+for the `verify` and `verify-signature` inputs.
+
+To verify a manual download, check the signature over `checksums.txt` first —
+it proves who produced the file — then check your archive against it:
 
 ```sh
+# 1. The signature is keyless, so the certificate identity must be pinned.
 cosign verify-blob \
-  --certificate rowshape_<version>_checksums.txt.pem \
-  --signature   rowshape_<version>_checksums.txt.sig \
-  rowshape_<version>_checksums.txt
+  --certificate checksums.txt.pem \
+  --signature   checksums.txt.sig \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --certificate-identity-regexp "^https://github.com/rowshape/rowshape/\.github/workflows/.+@refs/tags/" \
+  checksums.txt
+
+# 2. Now that checksums.txt is trusted, check the archive against it.
+sha256sum --ignore-missing -c checksums.txt
 ```
+
+Order matters: verifying the archive against an *unverified* `checksums.txt`
+proves only that the two files agree, which an attacker who replaced both can
+arrange. The identity flags are required — without them cosign will not verify a
+keyless signature at all.
 
 The binary is a single static executable with a deliberately small dependency
 set — half the reason rowshape is written in Go.

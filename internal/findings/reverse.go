@@ -2,6 +2,7 @@ package findings
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/rowshape/rowshape/internal/fixture"
@@ -34,6 +35,14 @@ func (rsReverse) Analyze(f *fixture.Fixture, c *validate.Capture) []verdict.Find
 		switch {
 		case strings.HasPrefix(upper, "DROP TABLE"):
 			out = append(out, dropTableFinding(f, clean, upper))
+		case strings.HasPrefix(upper, "TRUNCATE"):
+			// TRUNCATE reached only rsperf's deleteTarget, which exists solely to
+			// look for long-tailed CASCADING children — so a TRUNCATE with no
+			// cascading child produced ZERO findings and the verdict was PASS.
+			// Total irreversible data loss under ACCESS EXCLUSIVE, certified
+			// clean, and it succeeds against the hydrated table too, so the
+			// apply-failure floor never fires either.
+			out = append(out, truncateFinding(f, clean, upper))
 		case strings.HasPrefix(upper, "ALTER TABLE") && strings.Contains(upper, "DROP COLUMN"):
 			if fnd, ok := dropColumnFinding(f, clean, upper); ok {
 				out = append(out, fnd)
@@ -55,15 +64,66 @@ func dropTableFinding(f *fixture.Fixture, clean, upper string) verdict.Finding {
 	table := resolveTable(f, dropTableTarget(clean, upper))
 	rows := f.Tables[table].Rows.Value
 	return verdict.Finding{
-		Code:        "RS-REVERSE-002",
-		Severity:    verdict.SeverityWarn,
-		Title:       fmt.Sprintf("DROP TABLE %s is irreversible: all %s rows are lost", shortTable(table), humanCount(rows)),
-		Detail:      "Dropping a table permanently removes every row; a down-migration can recreate the table but not its data.",
+		Code:     "RS-REVERSE-002",
+		Severity: verdict.SeverityWarn,
+		Title:    fmt.Sprintf("DROP TABLE %s is irreversible: all %s rows are lost", shortTable(table), humanCount(rows)),
+		Detail: "Dropping a table permanently removes every row; a down-migration can recreate the table but " +
+			"not its data. " + irreversibleGateNote,
 		Evidence:    map[string]any{"rows": rows},
 		DependsOn:   []string{table + ".rows"},
 		Remediation: remediation("RS-REVERSE-002"),
 		Explain:     "rowshape explain RS-REVERSE-002",
 	}
+}
+
+// truncateFinding reports the irreversibility and lock cost of a TRUNCATE.
+//
+// Sized from the fixture's DECLARED rows rather than anything observed: running
+// TRUNCATE against a hydrated table says nothing about how much production data
+// it would destroy, which is precisely why executing the migration cannot
+// surface this hazard and a static rule must.
+func truncateFinding(f *fixture.Fixture, clean, upper string) verdict.Finding {
+	table := resolveTable(f, truncateTarget(clean, upper))
+	rows := f.Tables[table].Rows.Value
+	cascade := strings.Contains(upper, "CASCADE")
+
+	detail := "TRUNCATE removes every row and cannot be rolled back once committed. It holds ACCESS EXCLUSIVE for its duration, blocking all reads and writes, and does not fire per-row DELETE triggers."
+	if cascade {
+		detail += " CASCADE additionally empties every table with a foreign key into this one."
+	}
+	detail += " " + irreversibleGateNote
+	ev := map[string]any{"rows": rows, "cascade": cascade}
+
+	return verdict.Finding{
+		Code:        "RS-REVERSE-004",
+		Severity:    verdict.SeverityWarn,
+		Title:       fmt.Sprintf("TRUNCATE %s is irreversible: all %s rows are lost", shortTable(table), humanCount(rows)),
+		Detail:      detail,
+		Evidence:    ev,
+		DependsOn:   []string{table + ".rows"},
+		Remediation: remediation("RS-REVERSE-004"),
+		Explain:     "rowshape explain RS-REVERSE-004",
+	}
+}
+
+// truncateTarget extracts the first table named by a TRUNCATE. The optional
+// TABLE keyword and the ONLY qualifier are both stripped, matching
+// alterTableTarget's handling.
+func truncateTarget(clean, upper string) string {
+	rest := strings.TrimSpace(clean[len("TRUNCATE"):])
+	restUp := strings.ToUpper(rest)
+	for _, kw := range []string{"TABLE ", "ONLY "} {
+		if strings.HasPrefix(restUp, kw) {
+			rest = strings.TrimSpace(rest[len(kw):])
+			restUp = strings.ToUpper(rest)
+		}
+	}
+	// TRUNCATE accepts a comma-separated list; the first name is enough to size
+	// and locate the finding.
+	if i := strings.IndexAny(rest, " ,;"); i > 0 {
+		rest = rest[:i]
+	}
+	return strings.Trim(rest, `";`)
 }
 
 func dropColumnFinding(f *fixture.Fixture, clean, upper string) (verdict.Finding, bool) {
@@ -74,10 +134,11 @@ func dropColumnFinding(f *fixture.Fixture, clean, upper string) (verdict.Finding
 	}
 	rows := f.Tables[table].Rows.Value
 	return verdict.Finding{
-		Code:        "RS-REVERSE-001",
-		Severity:    verdict.SeverityWarn,
-		Title:       fmt.Sprintf("DROP COLUMN %s.%s loses its data irreversibly", shortTable(table), col),
-		Detail:      "Dropping a column permanently removes its values across all rows; a down-migration can recreate the column but not what it held.",
+		Code:     "RS-REVERSE-001",
+		Severity: verdict.SeverityWarn,
+		Title:    fmt.Sprintf("DROP COLUMN %s.%s loses its data irreversibly", shortTable(table), col),
+		Detail: "Dropping a column permanently removes its values across all rows; a down-migration can " +
+			"recreate the column but not what it held. " + irreversibleGateNote,
 		Evidence:    map[string]any{"rows": rows},
 		DependsOn:   []string{table + ".rows"},
 		Remediation: remediation("RS-REVERSE-001"),
@@ -212,13 +273,64 @@ func isNarrowing(oldType, newType string) bool {
 			return rn < ro
 		}
 	}
-	if (o == "text" || o == "varchar" || o == "character varying" || o == "character" || o == "char") && strings.Contains(nFull, "(") {
-		return true
+	// String types: a length limit only loses data if it is SHORTER than what
+	// the column already permits.
+	//
+	// This used to be `old is a string type && new contains "("`, which never
+	// compared the two lengths — so `varchar(50) -> varchar(255)` (a widening)
+	// and even `varchar(50) -> varchar(50)` (no change at all) were both reported
+	// as "narrowing can truncate data irreversibly". That is a false FAIL on a
+	// safe migration, which is worse than a missed finding: it blocks correct
+	// work and teaches people to ignore the tool.
+	if isStringType(o) && strings.Contains(nFull, "(") {
+		oldLen, oldBounded := typeLength(oldType)
+		newLen, newBounded := typeLength(newType)
+		switch {
+		case !newBounded:
+			return false // e.g. -> text: strictly wider
+		case !oldBounded:
+			return true // text/varchar with no limit -> varchar(n): a real limit appears
+		default:
+			return newLen < oldLen
+		}
 	}
 	if (o == "numeric" || o == "decimal" || o == "double precision" || o == "real") && (n == "integer" || n == "bigint" || n == "smallint" || n == "int") {
 		return true
 	}
 	return false
+}
+
+// isStringType reports whether a base type is a character type.
+func isStringType(base string) bool {
+	switch base {
+	case "text", "varchar", "character varying", "character", "char":
+		return true
+	}
+	return false
+}
+
+// typeLength extracts the length modifier from a type, e.g. "varchar(255)" -> 255.
+// bounded is false for a type with no modifier ("text", "varchar"), which is the
+// unbounded case and must never be treated as length 0.
+func typeLength(t string) (n int, bounded bool) {
+	open := strings.Index(t, "(")
+	if open < 0 {
+		return 0, false
+	}
+	close := strings.Index(t[open:], ")")
+	if close < 0 {
+		return 0, false
+	}
+	inner := strings.TrimSpace(t[open+1 : open+close])
+	// numeric(10,2) has a scale; only the first component is the length.
+	if comma := strings.Index(inner, ","); comma >= 0 {
+		inner = strings.TrimSpace(inner[:comma])
+	}
+	v, err := strconv.Atoi(inner)
+	if err != nil || v < 0 {
+		return 0, false
+	}
+	return v, true
 }
 
 // baseSQLType strips a type's length/precision modifier ("varchar(255)" -> "varchar").
@@ -228,3 +340,14 @@ func baseSQLType(t string) string {
 	}
 	return t
 }
+
+// irreversibleGateNote is appended to findings about IRREVERSIBLE data loss.
+//
+// These are SeverityWarn, and the Action's default is warn-as-fail:false — so
+// the default configuration of the default surface lets irreversible data loss
+// merge without blocking. That may well be the right default (a WARN that
+// blocks would make the tool unusable on legitimate teardown migrations), but it
+// must not be a surprise. Whether the severity itself should change is a product
+// decision; saying plainly what the current default does is not.
+const irreversibleGateNote = "Note: this is a WARN, and the GitHub Action does not block on WARN unless " +
+	"warn-as-fail is set — so with the default configuration this will merge."

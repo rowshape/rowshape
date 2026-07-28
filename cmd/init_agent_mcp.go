@@ -51,8 +51,14 @@ type mcpClient struct {
 // Zed is deliberately absent: it keys servers under `context_servers` with a
 // different entry shape, its settings file is JSONC (comments would not survive
 // the round-trip below), and the shape has moved across versions. A half-right
-// entry in a user's settings.json is worse than an honest omission — the summary
-// prints the entry to paste instead.
+// entry in a user's settings.json is worse than an honest omission, so rowshape
+// does not write one.
+//
+// NOTE: this comment used to claim "the summary prints the entry to paste
+// instead". Nothing printed one — grep for "zed" matches only this comment. The
+// reasoning for excluding Zed is sound; the mitigation was never built. Printing
+// a paste-able snippet would make the omission actionable and is worth doing;
+// claiming it while not doing it was worse than saying nothing.
 var supportedMCPClients = []mcpClient{
 	{
 		Name:    "Claude Code",
@@ -201,7 +207,9 @@ func writeMCPConfig(dir string, c mcpClient) (writeStatus, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return 0, fmt.Errorf("creating %s: %w", filepath.Dir(c.Path), err)
 	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
+	// Atomic: this file holds every OTHER MCP server the user has configured,
+	// and a truncating write that is interrupted destroys all of them.
+	if err := writeFileAtomic(path, out, 0o644); err != nil {
 		return 0, fmt.Errorf("writing %s: %w", c.Path, err)
 	}
 	if existed {

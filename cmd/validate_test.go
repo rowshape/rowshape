@@ -51,7 +51,7 @@ tables:
 		ephemeral:   "postgres://admin:secret@" + prodHost + ":5432/postgres",
 		scale:       1.0,
 	}
-	_, stderr := captureOutput(t, func() error { return runValidate(opts) })
+	_, stderr := captureOutput(t, func() error { return runValidate(context.Background(), opts) })
 
 	if !strings.Contains(stderr, "refusing to run against the fixture's source host") {
 		t.Errorf("expected a host-match refusal on stderr, got:\n%s", stderr)
@@ -232,7 +232,7 @@ func TestValidateEndToEnd(t *testing.T) {
 		scale:       1.0,
 		asJSON:      true,
 	}
-	stdout, stderr := captureOutput(t, func() error { return runValidate(opts) })
+	stdout, stderr := captureOutput(t, func() error { return runValidate(context.Background(), opts) })
 
 	if !strings.Contains(stdout, `"verdict"`) || !strings.Contains(stdout, `"rowshape"`) {
 		t.Errorf("expected a JSON verdict on stdout, got:\n%s\nstderr:\n%s", stdout, stderr)
@@ -287,4 +287,32 @@ func captureOutput(t *testing.T, fn func() error) (stdout, stderr string) {
 	<-done
 	os.Stdout, os.Stderr = origOut, origErr
 	return outBuf.String(), errBuf.String()
+}
+
+// TestIsSQLFileCaseInsensitive: Windows and macOS default to case-insensitive
+// filesystems, where `001_init.SQL` is an ordinary file. isSQLFile used to
+// compare the extension exactly while plan.go, mcp/tool_validate_migration.go
+// and runner/rawsql.go all folded case — so the same file validated through one
+// command and failed with RunnerNotFound through another.
+func TestIsSQLFileCaseInsensitive(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.sql", "b.SQL", "c.Sql"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("SELECT 1;"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !isSQLFile(p) {
+			t.Errorf("isSQLFile(%q) = false, want true — .sql matching must fold case", name)
+		}
+	}
+	notSQL := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(notSQL, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if isSQLFile(notSQL) {
+		t.Errorf("isSQLFile(notes.txt) = true, want false")
+	}
+	if isSQLFile(dir) {
+		t.Errorf("isSQLFile(<dir>) = true, want false")
+	}
 }

@@ -1,0 +1,7 @@
+{
+  "description": "ADD COLUMN with a DEFAULT whose volatility rowshape cannot determine — RS-LOCK-001 WARN. The known-volatile list cannot be exhaustive (users define their own functions), so an unrecognized expression must resolve to 'I cannot tell' rather than to 'safe'. Before this change the case returned PASS on PG 16.",
+  "verdict": "WARN",
+  "findings": [
+    {"code": "RS-LOCK", "severity": "warn"}
+  ]
+}

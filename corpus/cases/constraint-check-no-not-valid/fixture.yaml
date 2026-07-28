@@ -1,0 +1,13 @@
+rowshape_fixture: "1"
+meta:
+  id: constraint-check-no-not-valid
+  engine: {name: postgres, version: "16"}
+  privacy: standard
+  profile: {mode: fast, escalated: []}
+tables:
+  public.orders:
+    rows: {value: 200000000, confidence: exact}
+    columns:
+      id: {type: bigint, nullable: false, unique: {value: true, confidence: exact, via: constraint}}
+      amount: {type: integer, nullable: false, range: {min: 1, max: 100000}}
+    constraints: [{name: orders_pkey, kind: primary_key, columns: [id]}]

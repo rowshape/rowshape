@@ -34,11 +34,11 @@ func newVerifyCmd() *cobra.Command {
 			"schema a fixture declares: tables, columns, nullability, and constraints.\n" +
 			"It writes nothing. It exits 0 when reality matches intent, 1 on drift.",
 		Args: cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(c *cobra.Command, args []string) error {
 			if len(args) == 1 {
 				opts.fixturePath = args[0]
 			}
-			return runVerify(opts)
+			return runVerify(c.Context(), opts)
 		},
 	}
 	f := cmd.Flags()
@@ -47,8 +47,7 @@ func newVerifyCmd() *cobra.Command {
 	return cmd
 }
 
-func runVerify(opts *verifyOptions) error {
-	ctx := context.Background()
+func runVerify(ctx context.Context, opts *verifyOptions) error {
 
 	data, err := os.ReadFile(opts.fixturePath)
 	if err != nil {

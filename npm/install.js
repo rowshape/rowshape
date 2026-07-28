@@ -8,6 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const https = require("https");
 const zlib = require("zlib");
+const crypto = require("crypto");
 const { execSync } = require("child_process");
 
 const REPO = "rowshape/rowshape";
@@ -37,12 +38,9 @@ function fail(msg) {
 if (!PLATFORM || !ARCH) {
   fail(`unsupported platform ${process.platform}/${process.arch}`);
 }
-// The release builds 5 combos: darwin/linux on amd64+arm64, windows on amd64.
-// goreleaser explicitly ignores windows/arm64, so there is no asset to fetch —
-// say that plainly rather than reporting a confusing 404.
-if (PLATFORM === "windows" && ARCH === "arm64") {
-  fail("windows/arm64 is not a released target");
-}
+// The release builds 6 combos: darwin/linux/windows on amd64+arm64.
+// windows/arm64 used to be excluded and refused here; it is now built
+// (.goreleaser.yaml), so every platform this wrapper supports has an asset.
 
 // assetName mirrors .goreleaser.yaml archives.name_template exactly:
 //   {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
@@ -72,38 +70,161 @@ function get(u, cb) {
     .on("error", (e) => fail(`network error: ${e.message}`));
 }
 
-// Exported so the naming can be checked against what goreleaser actually
-// publishes (npm/naming.test.js). Requiring this file must not download
+// expectedSum pulls one asset's digest out of a goreleaser checksums.txt, whose
+// lines are `<hex>  <filename>`. The filename is compared as a whole field, not
+// with a substring test, so an entry for a different asset that happens to
+// contain this name cannot satisfy it.
+function expectedSum(checksums, asset) {
+  for (const line of checksums.split("\n")) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 2) continue;
+    const name = parts[1].replace(/^\*/, ""); // some tools prefix binary mode
+    if (name === asset) return parts[0].toLowerCase();
+  }
+  return null;
+}
+
+// verifyChecksum throws unless the archive matches its recorded digest. It fails
+// CLOSED: a missing checksums entry is a refusal, not a warning. The release
+// publishes checksums.txt and the docs tell users to verify it — this installer
+// used to download an archive and execute it having verified nothing at all.
+function verifyChecksum(archivePath, checksums, asset) {
+  const want = expectedSum(checksums, asset);
+  if (!want) throw new Error(`${asset} has no entry in checksums.txt`);
+  const got = crypto.createHash("sha256").update(fs.readFileSync(archivePath)).digest("hex");
+  if (got !== want) {
+    throw new Error(`checksum mismatch for ${asset}\n  expected ${want}\n  actual   ${got}`);
+  }
+}
+
+// Exported so the naming and verification can be checked against what goreleaser
+// actually publishes (npm/naming.test.js). Requiring this file must not download
 // anything — the postinstall hook runs it directly.
-module.exports = { assetName, PLATFORM, ARCH };
+module.exports = { assetName, expectedSum, verifyChecksum, PLATFORM, ARCH };
 if (require.main !== module) return;
 
 fs.mkdirSync(binDir, { recursive: true });
 const archivePath = path.join(binDir, asset);
+const releaseBase = `https://github.com/${REPO}/releases/download/v${VERSION}`;
+
+// Collect a text asset (checksums.txt and the cosign material). `optional`
+// resolves to null on 404 instead of aborting, so a release without signature
+// assets still installs under checksum verification.
+function getText(u, optional, cb) {
+  https
+    .get(u, { headers: { "User-Agent": "rowshape-npm-installer" } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return getText(res.headers.location, optional, cb);
+      }
+      if (res.statusCode !== 200) {
+        if (optional) return cb(null);
+        return fail(`could not download ${u} (${res.statusCode})`);
+      }
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (c) => (body += c));
+      res.on("end", () => cb(body));
+    })
+    .on("error", (e) => (optional ? cb(null) : fail(`network error: ${e.message}`)));
+}
+
+// Best-effort cosign verification of checksums.txt, mirroring install.sh.
+// ROWSHAPE_VERIFY_SIGNATURE=true turns "cosign missing" into a hard failure.
+function verifySignature(checksumsPath, done) {
+  const mode = process.env.ROWSHAPE_VERIFY_SIGNATURE || "auto";
+  if (mode === "false") return done();
+  let haveCosign = true;
+  try {
+    execSync("cosign version", { stdio: "ignore" });
+  } catch {
+    haveCosign = false;
+  }
+  if (!haveCosign) {
+    if (mode === "true") fail("cosign not on PATH and ROWSHAPE_VERIFY_SIGNATURE=true");
+    return done();
+  }
+  getText(`${releaseBase}/checksums.txt.sig`, true, (sig) => {
+    getText(`${releaseBase}/checksums.txt.pem`, true, (pem) => {
+      if (!sig || !pem) {
+        if (mode === "true") fail("signature assets missing and ROWSHAPE_VERIFY_SIGNATURE=true");
+        return done();
+      }
+      const sigPath = path.join(binDir, "checksums.txt.sig");
+      const pemPath = path.join(binDir, "checksums.txt.pem");
+      fs.writeFileSync(sigPath, sig);
+      fs.writeFileSync(pemPath, pem);
+      try {
+        execSync(
+          `cosign verify-blob --certificate "${pemPath}" --signature "${sigPath}" ` +
+            `--certificate-oidc-issuer "https://token.actions.githubusercontent.com" ` +
+            `--certificate-identity-regexp "^https://github.com/${REPO}/\\.github/workflows/.+@refs/tags/" ` +
+            `"${checksumsPath}"`,
+          { stdio: "ignore" }
+        );
+        console.error("rowshape: cosign signature verified for checksums.txt");
+      } catch {
+        fail("cosign verification FAILED for checksums.txt");
+      } finally {
+        fs.rmSync(sigPath, { force: true });
+        fs.rmSync(pemPath, { force: true });
+      }
+      done();
+    });
+  });
+}
+
+// Verification runs before the archive is ever extracted or made executable.
+// ROWSHAPE_VERIFY=false is the only bypass and is not the default.
+function withVerification(next) {
+  if (process.env.ROWSHAPE_VERIFY === "false") {
+    console.error("rowshape: WARNING - checksum verification disabled by ROWSHAPE_VERIFY=false");
+    return next();
+  }
+  getText(`${releaseBase}/checksums.txt`, false, (checksums) => {
+    const checksumsPath = path.join(binDir, "checksums.txt");
+    fs.writeFileSync(checksumsPath, checksums);
+    // Signature first: it proves who produced checksums.txt, so a forged
+    // checksums.txt cannot go on to validate a forged archive.
+    verifySignature(checksumsPath, () => {
+      try {
+        verifyChecksum(archivePath, checksums, asset);
+        console.error(`rowshape: checksum verified for ${asset}`);
+      } catch (e) {
+        fs.rmSync(archivePath, { force: true });
+        fail(`${e.message}\nrefusing to install an unverified binary`);
+      } finally {
+        fs.rmSync(checksumsPath, { force: true });
+      }
+      next();
+    });
+  });
+}
 
 get(url, (res) => {
   const out = fs.createWriteStream(archivePath);
   res.pipe(out);
   out.on("finish", () => {
     out.close(() => {
-      try {
-        if (ext === "zip") {
-          // Rely on the system unzip / tar (tar handles zip on modern Windows).
-          execSync(`tar -xf "${archivePath}" -C "${binDir}"`);
-        } else {
-          const tar = fs.readFileSync(archivePath);
-          const tarballPath = path.join(binDir, "rowshape.tar");
-          fs.writeFileSync(tarballPath, zlib.gunzipSync(tar));
-          execSync(`tar -xf "${tarballPath}" -C "${binDir}"`);
-          fs.unlinkSync(tarballPath);
+      withVerification(() => {
+        try {
+          if (ext === "zip") {
+            // Rely on the system unzip / tar (tar handles zip on modern Windows).
+            execSync(`tar -xf "${archivePath}" -C "${binDir}"`);
+          } else {
+            const tar = fs.readFileSync(archivePath);
+            const tarballPath = path.join(binDir, "rowshape.tar");
+            fs.writeFileSync(tarballPath, zlib.gunzipSync(tar));
+            execSync(`tar -xf "${tarballPath}" -C "${binDir}"`);
+            fs.unlinkSync(tarballPath);
+          }
+          fs.unlinkSync(archivePath);
+          const bin = path.join(binDir, binName);
+          if (!fs.existsSync(bin)) fail("binary not found after extraction");
+          if (process.platform !== "win32") fs.chmodSync(bin, 0o755);
+        } catch (e) {
+          fail(`extraction failed: ${e.message}`);
         }
-        fs.unlinkSync(archivePath);
-        const bin = path.join(binDir, binName);
-        if (!fs.existsSync(bin)) fail("binary not found after extraction");
-        if (process.platform !== "win32") fs.chmodSync(bin, 0o755);
-      } catch (e) {
-        fail(`extraction failed: ${e.message}`);
-      }
+      });
     });
   });
 });

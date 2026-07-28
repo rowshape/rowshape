@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/rowshape/rowshape/internal/fixture"
@@ -89,14 +90,16 @@ func NormalizeHost(host string) string {
 // ApplyPrivacy enforces a privacy level over a fixture in place (RFC §8.2). It is
 // the single emit-time gate: per-column `redact` overrides are applied first and
 // always win, then the level's field matrix. If k <= 0 the default is used.
+// It MUTATES f IN PLACE. SINGLE-OWNER CONTRACT: the caller must own f
+// exclusively. See validate.MarkExact for why this matters to the planned
+// phase-5 cloud API — a cached, shared fixture cannot be passed here.
 func ApplyPrivacy(f *fixture.Fixture, level Privacy, k int) {
 	if k <= 0 {
 		k = DefaultK
 	}
 	for tname, tbl := range f.Tables {
-		rows := tbl.Rows.Value
 		for cname, col := range tbl.Columns {
-			applyColumnPrivacy(&col, level, k, rows)
+			applyColumnPrivacy(&col, level, k)
 			tbl.Columns[cname] = col
 		}
 		if level == PrivacyStrict {
@@ -113,7 +116,7 @@ func ApplyPrivacy(f *fixture.Fixture, level Privacy, k int) {
 
 // applyColumnPrivacy redacts one column: per-column overrides first, then the
 // level's rules.
-func applyColumnPrivacy(col *fixture.Column, level Privacy, k int, rows int64) {
+func applyColumnPrivacy(col *fixture.Column, level Privacy, k int) {
 	redact := redactSet(col.Redact)
 	switch {
 	case redact["all"]:
@@ -154,7 +157,7 @@ func applyColumnPrivacy(col *fixture.Column, level Privacy, k int, rows int64) {
 		col.Values = nil
 		col.Frequencies = nil
 	case PrivacyPermissive:
-		if !permissiveValuesAllowed(col, rows, k) {
+		if !permissiveValuesAllowed(col, k) {
 			col.Values = nil
 			col.Frequencies = nil
 		}
@@ -162,9 +165,23 @@ func applyColumnPrivacy(col *fixture.Column, level Privacy, k int, rows int64) {
 }
 
 // permissiveValuesAllowed reports whether a value set is safe to publish under
-// permissive privacy: distinct <= 50 AND every value occurs at least k times
-// (RFC §8.2). The per-value count is estimated as frequency × declared rows.
-func permissiveValuesAllowed(col *fixture.Column, rows int64, k int) bool {
+// permissive privacy: distinct <= 50 AND every value was OBSERVED at least k
+// times in the sample the value set came from (RFC §8.2).
+//
+// The count must come from the sample, not from frequency × declared rows. A
+// frequency is a proportion over at most SampleN rows, so its smallest non-zero
+// value is 1/SampleN; multiplying that by an estimated row count yields
+// rows/SampleN, which exceeds k on any table past k×SampleN rows. With the
+// defaults (k=20, SampleN=500) that gate stops rejecting anything at 10,000
+// rows: a value seen exactly ONCE in the sample of a 100M-row table scored
+// 200,000 and was published verbatim. The gate got weaker as the table — and
+// so the re-identification risk — got larger, which inverts its purpose.
+//
+// Counting observations instead is both sound and conservative: k occurrences
+// in the sample imply at least k in the table, so a published value is never
+// rarer than it appears. Values rare enough to identify someone are simply too
+// rare to survive sampling, which is the property §8.2 actually wants.
+func permissiveValuesAllowed(col *fixture.Column, k int) bool {
 	if len(col.Values) == 0 {
 		return false
 	}
@@ -174,8 +191,16 @@ func permissiveValuesAllowed(col *fixture.Column, rows int64, k int) bool {
 	if len(col.Frequencies) != len(col.Values) {
 		return false
 	}
+	// No denominator means the observed count cannot be recovered (e.g. a
+	// fixture read back from disk, where SampleN is not serialized). Withhold
+	// rather than guess: the gate fails closed.
+	if col.SampleN <= 0 {
+		return false
+	}
 	for _, fr := range col.Frequencies {
-		if fr*float64(rows) < float64(k) {
+		// Round rather than truncate: frequencies are stored rounded to 6
+		// places, so a value seen exactly k times can land a hair under k/n.
+		if int(math.Round(fr*float64(col.SampleN))) < k {
 			return false
 		}
 	}

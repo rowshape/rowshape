@@ -81,19 +81,62 @@ func massDMLFinding(f *fixture.Fixture, upper, sql string) (verdict.Finding, boo
 // the target table and the verb.
 func unqualifiedDML(upper, sql string) (table, verb string, ok bool) {
 	switch {
-	case strings.HasPrefix(upper, "DELETE FROM ") && !strings.Contains(upper, " WHERE "):
+	case strings.HasPrefix(upper, "DELETE FROM ") && !hasWhereClause(upper):
 		return firstIdentAfter(sql, "DELETE FROM "), "DELETE", true
-	case strings.HasPrefix(upper, "UPDATE ") && strings.Contains(upper, " SET ") && !strings.Contains(upper, " WHERE "):
+	case strings.HasPrefix(upper, "UPDATE ") && strings.Contains(upper, " SET ") && !hasWhereClause(upper):
 		return firstIdentAfter(sql, "UPDATE "), "UPDATE", true
 	}
 	return "", "", false
+}
+
+// hasWhereClause reports whether an upper-cased statement carries a WHERE.
+//
+// Testing for the literal " WHERE " missed `DELETE FROM t WHERE(id=1)`, which is
+// valid SQL — collapseSpaces normalizes whitespace runs but does not insert a
+// space before "(" — so a perfectly well-qualified DELETE was reported as
+// unqualified full-table DML. A FALSE finding on safe SQL is the expensive kind:
+// it blocks a correct migration.
+//
+// The check is boundary-aware rather than a substring test so that an identifier
+// merely containing "WHERE" (a column named `nowhere`, say) cannot satisfy it.
+func hasWhereClause(upper string) bool {
+	const kw = "WHERE"
+	for i := 0; ; {
+		j := strings.Index(upper[i:], kw)
+		if j < 0 {
+			return false
+		}
+		j += i
+		beforeOK := j == 0 || !isIdentByte(upper[j-1])
+		after := j + len(kw)
+		afterOK := after >= len(upper) || !isIdentByte(upper[after])
+		if beforeOK && afterOK {
+			return true
+		}
+		i = j + len(kw)
+	}
+}
+
+// isIdentByte reports whether c can appear inside a SQL identifier.
+func isIdentByte(c byte) bool {
+	return c == '_' || c == '$' ||
+		(c >= '0' && c <= '9') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= 'a' && c <= 'z')
 }
 
 // cascadeFanoutFindings returns a finding for each ON DELETE CASCADE reference
 // into parent whose fan-out is long-tailed.
 func cascadeFanoutFindings(f *fixture.Fixture, parent string) []verdict.Finding {
 	var out []verdict.Finding
-	for childName, child := range f.Tables {
+	// Sorted, not map order. A parent with two or more long-tailed cascading
+	// children emitted its findings in whatever order Go's map iteration chose,
+	// so the same fixture and migration produced a different Findings slice run
+	// to run — and the verdict is shaped as a signable in-toto predicate
+	// (internal/verdict/dsse.go), so an unstable slice means an unstable
+	// attestation over identical inputs.
+	for _, childName := range sortedTableNames(f) {
+		child := f.Tables[childName]
 		for _, ref := range child.References {
 			if refParent(ref.To) != parent || !strings.EqualFold(ref.OnDelete, "cascade") || ref.Fanout == nil {
 				continue

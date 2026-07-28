@@ -3,6 +3,7 @@ package validate
 import (
 	"errors"
 	"strings"
+	"sync"
 
 	"github.com/rowshape/rowshape/internal/fixture"
 	"github.com/rowshape/rowshape/internal/profile"
@@ -22,14 +23,43 @@ type Analyzer interface {
 }
 
 // registered holds the analyzers plugged in by later phase-2 tasks.
-var registered []Analyzer
+//
+// Guarded, and Registered returns a COPY. In the CLI only init functions ever
+// write here, so this was safe in practice — but Register is EXPORTED and the
+// stated phase-5 goal is a cloud API importing this package, where a
+// request-time Register would be an unsynchronized append (a data race, and a
+// torn slice header) and a caller holding the live backing array could observe
+// a concurrent append mid-write while BuildResult was ranging it.
+//
+// The cost is one RLock and one slice copy per validate run, against an
+// analyzer set of well under a hundred entries. That is not a price worth
+// arguing about for removing a data race from a package that is meant to be
+// imported by a server.
+var (
+	registryMu sync.RWMutex
+	registered []Analyzer
+)
 
 // Register adds an analyzer to the default registry. Analyzers call this from an
 // init function so `validate` picks them up without the CLI knowing each one.
-func Register(a Analyzer) { registered = append(registered, a) }
+func Register(a Analyzer) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	registered = append(registered, a)
+}
 
 // Registered returns the default analyzer set.
-func Registered() []Analyzer { return registered }
+//
+// The returned slice is a copy: handing out the package's own backing array let
+// a caller observe a concurrent append, and let a caller mutate the registry by
+// writing through the slice it was given.
+func Registered() []Analyzer {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	out := make([]Analyzer, len(registered))
+	copy(out, registered)
+	return out
+}
 
 // ErrHostMatchesSource is the hard refusal that keeps validate's blast radius at
 // zero: the target host hashes to the fixture's source host, so validate would
@@ -64,6 +94,20 @@ var ErrHostMatchesSource = errors.New("validate: refusing to run against the fix
 // connection. The refusal is the last line, not the only one: it is why
 // `--ephemeral` wants a disposable server, not a hostname that merely looks
 // different from production.
+// ErrNoFixtureSource is the refusal when a fixture carries no meta.source, so
+// the host-match guard has nothing to compare against.
+var ErrNoFixtureSource = errors.New(
+	"validate: this fixture records no source host (meta.source), so rowshape cannot verify that the " +
+		"target is not the database it was pulled from")
+
+// CheckHost enforces the host-match refusal.
+//
+// A missing source is permitted HERE, and that is a deliberate split rather than
+// an oversight — see CheckWriteTarget, which does not permit it. The two paths
+// differ enormously in stakes: --ephemeral creates and drops a throwaway
+// database, while --target COMMITS the migration to whatever it is pointed at.
+// Refusing every source-less fixture on both paths would break hand-authored and
+// vendored fixtures for no proportionate gain on the disposable one.
 func CheckHost(fixtureSource, targetHost string) error {
 	if fixtureSource == "" || targetHost == "" {
 		return nil
@@ -191,6 +235,19 @@ func wantFor(severity string) string {
 // the data is ground truth rather than a sample, so uniqueness, null fractions,
 // orphan fractions, and fan-outs read there are exact (PRD §15, the Neon
 // branching complementarity: `--target $NEON_BRANCH_URL` upgrades facts to exact).
+// MarkExact MUTATES f IN PLACE, including through shared *Fact pointers.
+//
+// SINGLE-OWNER CONTRACT: the caller must own f exclusively for the duration.
+// This is not a data race in the CLI, where each run parses its own fixture, but
+// it is the reason a parsed fixture cannot be CACHED and shared across
+// concurrent requests in the planned phase-5 cloud API: two requests marking the
+// same fixture would race on Confidence, and a request that only READS the
+// fixture would see another request's mutation. profile.ApplyPrivacy has the
+// same property.
+//
+// If a server ever wants to share one parsed fixture, it needs a deep copy first
+// — a shallow copy is not enough, because the Confidence writes below go through
+// pointers the copy would still share.
 func MarkExact(f *fixture.Fixture) {
 	if f == nil {
 		return
@@ -435,4 +492,38 @@ func dollarTag(runes []rune, i int) (string, bool) {
 
 func isAlnum(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+// CheckWriteTarget guards the one path that WRITES to a database the user
+// nominated: `validate --target`, which opens a transaction, executes the
+// migration DDL and COMMITS it.
+//
+// It fails CLOSED on a missing meta.source. The original guard returned nil
+// whenever the source was empty, which meant the single check standing between
+// this command and a production database silently switched itself off for any
+// hand-written, vendored or hand-edited fixture — precisely the fixtures least
+// likely to have come from a careful `rowshape pull`. An absent fact is a reason
+// to decline, never a reason to proceed. That is the rule the confidence model
+// applies everywhere else in this codebase, and the place it mattered most was
+// the one place it was not applied.
+//
+// iKnow is the deliberate override, mirroring the precedent `pull` already sets
+// for its superuser refusal: rowshape declines by default and lets someone who
+// understands the situation say so explicitly.
+//
+// KNOWN LIMIT, recorded rather than papered over: even with a source present,
+// this compares HOST HASHES. Pulling through a pgBouncer endpoint or a replica
+// CNAME and then targeting the primary yields different hashes and passes. The
+// robust comparison is the server's own system_identifier from
+// pg_control_system(), which survives DNS games — but recording that at pull
+// time touches the fixture schema and therefore the canonical digest, so it is a
+// deliberate follow-up rather than something to decide in passing.
+func CheckWriteTarget(fixtureSource, targetHost string, iKnow bool) error {
+	if err := CheckHost(fixtureSource, targetHost); err != nil {
+		return err // the target IS the source: refuse regardless of iKnow
+	}
+	if fixtureSource == "" && !iKnow {
+		return ErrNoFixtureSource
+	}
+	return nil
 }

@@ -39,6 +39,48 @@ type Runner interface {
 	// expects it (DATABASE_URL for Alembic/Prisma/Drizzle, a psql connection
 	// argument for raw SQL).
 	ApplyCmd(ctx context.Context, dsn string) *exec.Cmd
+	// Binary names the executable ApplyCmd shells out to, so availability can be
+	// checked before the command runs rather than surfacing as a raw exec error.
+	Binary() string
+}
+
+// EnsureAvailable reports whether the runner's tool is actually invocable,
+// turning a missing binary into a named, actionable failure.
+//
+// internal/target/container.go already does this pre-flight for `docker`; the
+// migration runners did not, so a missing tool surfaced as whatever exec
+// returned. That matters most off Linux: `psql` is not on PATH on a default
+// Windows box even with Postgres installed, and `prisma`/`drizzle-kit` are npm
+// shims that resolve to .CMD there.
+//
+// The returned error names the tool and how to get it; callers wrap it in a
+// toolerror with the RunnerNotFound category.
+func EnsureAvailable(r Runner) error {
+	bin := r.Binary()
+	if bin == "" {
+		return nil
+	}
+	if _, err := exec.LookPath(bin); err != nil {
+		return fmt.Errorf("%s runner needs %q on PATH, which was not found: %w", r.Kind(), bin, err)
+	}
+	return nil
+}
+
+// InstallHint suggests how to obtain a runner's tool, for the hint field of a
+// toolerror.
+func InstallHint(k Kind) string {
+	switch k {
+	case Alembic:
+		return "install Alembic (pip install alembic) or select another runner with --runner"
+	case Prisma:
+		return "install Prisma (npm i -g prisma) or select another runner with --runner"
+	case Drizzle:
+		return "install Drizzle Kit (npm i -g drizzle-kit) or select another runner with --runner"
+	case RawSQL:
+		return "install the PostgreSQL client tools so psql is on PATH, or select another runner with --runner"
+	default:
+		return "install the migration tool for this project, or select another runner with --runner"
+	}
 }
 
 // detector pairs a kind with the test that recognizes it in a project directory.

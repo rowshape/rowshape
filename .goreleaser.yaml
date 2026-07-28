@@ -34,10 +34,14 @@ builds:
     goarch:
       - amd64
       - arm64
-    # 5 platform/arch combos: darwin{amd64,arm64}, linux{amd64,arm64}, windows{amd64}.
-    ignore:
-      - goos: windows
-        goarch: arm64
+    # 6 platform/arch combos: darwin{amd64,arm64}, linux{amd64,arm64},
+    # windows{amd64,arm64}.
+    #
+    # windows/arm64 was previously ignored, which left the stated ship target
+    # ("darwin/linux/windows on amd64+arm64") half-true and sent Windows-on-ARM
+    # users — Surface, Dev Kit, Copilot+ PCs, a growing enterprise fleet — down
+    # the installers' "not a released target" path. With CGO_ENABLED=0 Go
+    # cross-compiles it for free; the cost is one more archive.
 
 archives:
   - id: rowshape

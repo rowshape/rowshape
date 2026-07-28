@@ -1,0 +1,10 @@
+{
+  "description": "ADD PRIMARY KEY on a 20M-row table — RS-LOCK-002 WARN. Succeeds, and holds the lock for the whole index build.",
+  "verdict": "WARN",
+  "findings": [
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
+  ]
+}

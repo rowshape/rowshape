@@ -5,6 +5,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/rowshape/rowshape/internal/plan"
+	"github.com/rowshape/rowshape/internal/toolerror"
 )
 
 // plan_against tells an agent what a migration would change on a live target
@@ -24,16 +25,16 @@ type planOutput struct {
 // handlePlanAgainst implements the plan_against tool.
 func handlePlanAgainst(ctx context.Context, _ *sdk.CallToolRequest, in planAgainstInput) (*sdk.CallToolResult, any, error) {
 	if in.Target == "" {
-		return errorResult("no target given; pass a live database URL to diff against (read-only)"), nil, nil
+		return errorText(toolerror.BadUsage, "no target given", "pass a live database URL to diff against (read-only; nothing is applied)"), nil, nil
 	}
 	stmts, err := migrationStatements(in.Migration)
 	if err != nil {
-		return errorResult(err.Error()), nil, nil
+		return errorText(toolerror.BadUsage, err.Error(), "point `migration` at a .sql file or a directory of them"), nil, nil
 	}
 
 	current, err := plan.ReadLiveSchema(ctx, in.Target)
 	if err != nil {
-		return errorResult(err.Error()), nil, nil
+		return errorText(toolerror.ConnectFailed, err.Error(), "check the target URL is reachable and the role can read the catalog"), nil, nil
 	}
 
 	out := planOutput{

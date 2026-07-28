@@ -1,0 +1,10 @@
+{
+  "description": "DROP NOT NULL — RS-DEPLOY-003 WARN. The reverse of RS-DATA-001: nothing fails at migration time, and the first null arrives later, at runtime, somewhere else.",
+  "verdict": "WARN",
+  "findings": [
+    {
+      "code": "RS-DEPLOY",
+      "severity": "warn"
+    }
+  ]
+}

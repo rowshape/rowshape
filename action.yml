@@ -52,7 +52,11 @@ inputs:
     required: false
     default: "true"
   runner:
-    description: Override migration runner detection (alembic|prisma|drizzle|rawsql).
+    description: >-
+      Override migration runner detection. Only `rawsql` can be VALIDATED today:
+      `alembic`, `prisma` and `drizzle` projects are detected, but capturing their
+      migrations is not implemented, and validate refuses with a clear error
+      rather than producing a verdict.
     required: false
     default: ""
   seed:
@@ -81,6 +85,23 @@ inputs:
     description: GitHub repo to download the release from (advanced; default rowshape/rowshape).
     required: false
     default: rowshape/rowshape
+  verify:
+    description: >-
+      Verify the downloaded archive against the release checksums before running
+      it. Default true, and it fails closed — a missing checksums.txt, a missing
+      entry, or a mismatch refuses the install. Set 'false' only if you knowingly
+      accept an unverified binary.
+    required: false
+    default: "true"
+  verify-signature:
+    description: >-
+      Verify the cosign keyless signature over checksums.txt. 'auto' (default)
+      verifies when cosign is on PATH and the signature assets exist, and falls
+      back to checksum-only otherwise; 'true' REQUIRES it and fails when cosign
+      is absent or the assets are missing — add sigstore/cosign-installer before
+      this step; 'false' skips it. Ignored when `verify` is false.
+    required: false
+    default: auto
 
 outputs:
   verdict:
@@ -90,7 +111,9 @@ outputs:
     description: The raw `rowshape validate` exit code (0 PASS, 1 FAIL, 2 WARN, 3 tool error).
     value: ${{ steps.run.outputs.exit-code }}
   verdict-json:
-    description: Path to the captured JSON verdict file (when json=true).
+    description: >-
+      Path to the captured JSON verdict file. Empty unless the file was actually
+      written, so a downstream step is never handed a path that does not exist.
     value: ${{ steps.run.outputs.verdict-json }}
 
 runs:
@@ -102,6 +125,8 @@ runs:
       env:
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_REPO: ${{ inputs.repo }}
+        INPUT_VERIFY: ${{ inputs.verify }}
+        INPUT_VERIFY_SIGNATURE: ${{ inputs.verify-signature }}
       run: bash "${GITHUB_ACTION_PATH}/.github/actions/rowshape/install.sh"
 
     - name: Run rowshape validate

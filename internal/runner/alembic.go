@@ -14,6 +14,9 @@ type alembicRunner struct {
 
 func (a *alembicRunner) Kind() Kind { return Alembic }
 
+// Binary is the executable ApplyCmd shells out to.
+func (a *alembicRunner) Binary() string { return "alembic" }
+
 // ApplyCmd runs `alembic upgrade head` from the project root, handing the target
 // DSN to Alembic through DATABASE_URL — the convention env.py reads. Rowshape
 // invokes Alembic; it does not touch the version table itself.

@@ -49,6 +49,7 @@ const COMBOS = [
   ["linux", "amd64", "tar.gz"],
   ["linux", "arm64", "tar.gz"],
   ["windows", "amd64", "zip"],
+  ["windows", "arm64", "zip"],
 ];
 
 check("asset names follow goreleaser's name_template", () => {

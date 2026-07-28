@@ -22,6 +22,8 @@ package action_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -96,6 +98,9 @@ type runResult struct {
 	output   map[string]string // parsed GITHUB_OUTPUT
 	verdict  string
 	stubArgs string
+	// combined is run.sh's stdout+stderr. Refusals must explain themselves, so
+	// tests assert on the message and not merely the exit code.
+	combined string
 }
 
 // invoke runs run.sh with the stub binary and the given inputs, returning the
@@ -138,8 +143,13 @@ func invoke(t *testing.T, extraEnv map[string]string) runResult {
 		}
 	}
 	stubArgs, _ := os.ReadFile(argsFile)
-	_ = out
-	return runResult{exit: exit, output: outputs, verdict: outputs["verdict"], stubArgs: string(stubArgs)}
+	return runResult{
+		exit:     exit,
+		output:   outputs,
+		verdict:  outputs["verdict"],
+		stubArgs: string(stubArgs),
+		combined: string(out),
+	}
 }
 
 // TestRunExitMapping is the core acceptance test (criteria 1 and 2): the wrapper
@@ -251,6 +261,7 @@ func TestInstallAssetNaming(t *testing.T) {
 		{"darwin", "amd64", "rowshape_1.2.3_darwin_amd64.tar.gz"},
 		{"darwin", "arm64", "rowshape_1.2.3_darwin_arm64.tar.gz"},
 		{"windows", "amd64", "rowshape_1.2.3_windows_amd64.zip"},
+		{"windows", "arm64", "rowshape_1.2.3_windows_arm64.zip"},
 	}
 	for _, tc := range cases {
 		script := "ROWSHAPE_INSTALL_SOURCE_ONLY=1 . '" + installSh + "'; rowshape_asset_name 1.2.3 " + tc.os + " " + tc.arch
@@ -336,5 +347,235 @@ func TestActionEndToEnd(t *testing.T) {
 				t.Errorf("expected verdict=%s in outputs, got:\n%s\nlog:\n%s", tc.wantVerd, outputs, out)
 			}
 		})
+	}
+}
+
+// TestInstallChecksumVerification covers the verification helpers in install.sh
+// by sourcing them, so it needs no release and no network.
+//
+// install.sh used to curl a release archive and execute it having verified
+// nothing — on the CI path, which runs with repository credentials in scope —
+// even though the release publishes checksums.txt and a cosign signature over
+// it, and the docs walk users through verifying them. These checks pin that the
+// verification exists and, importantly, that it FAILS CLOSED: a mismatch, a
+// missing entry, and a missing tool are all refusals rather than warnings.
+func TestInstallChecksumVerification(t *testing.T) {
+	bash := requireBash(t)
+	installSh := filepath.Join(repoRoot(t), ".github", "actions", "rowshape", "install.sh")
+
+	dir := t.TempDir()
+	asset := "rowshape_1.2.3_linux_amd64.tar.gz"
+	archive := filepath.Join(dir, asset)
+	body := []byte("this stands in for the release archive")
+	if err := os.WriteFile(archive, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	good := hex.EncodeToString(sum[:])
+
+	sums := filepath.Join(dir, "checksums.txt")
+	content := "" +
+		strings.Repeat("0", 64) + "  rowshape_1.2.3_darwin_arm64.tar.gz\n" +
+		good + "  " + asset + "\n" +
+		strings.Repeat("1", 64) + "  rowshape_1.2.3_windows_amd64.zip\n"
+	if err := os.WriteFile(sums, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A tampered archive: same name, different bytes.
+	tampered := filepath.Join(dir, "tampered.tar.gz")
+	if err := os.WriteFile(tampered, append(body, 'x'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(t *testing.T, args string) (string, bool) {
+		t.Helper()
+		script := "ROWSHAPE_INSTALL_SOURCE_ONLY=1 . '" + installSh + "'; " + args
+		out, err := exec.Command(bash, "-c", script).CombinedOutput()
+		return string(out), err == nil
+	}
+
+	toSlash := func(p string) string { return filepath.ToSlash(p) }
+
+	t.Run("matching archive verifies", func(t *testing.T) {
+		out, ok := run(t, "rowshape_verify_checksum '"+toSlash(archive)+"' '"+toSlash(sums)+"' '"+asset+"'")
+		if !ok {
+			t.Errorf("a matching archive must verify, got: %s", out)
+		}
+	})
+
+	t.Run("tampered archive is refused", func(t *testing.T) {
+		out, ok := run(t, "rowshape_verify_checksum '"+toSlash(tampered)+"' '"+toSlash(sums)+"' '"+asset+"'")
+		if ok {
+			t.Errorf("a tampered archive must be refused, got success: %s", out)
+		}
+		if !strings.Contains(out, "checksum mismatch") {
+			t.Errorf("the refusal must say why, got: %s", out)
+		}
+	})
+
+	t.Run("asset absent from checksums is refused", func(t *testing.T) {
+		out, ok := run(t, "rowshape_verify_checksum '"+toSlash(archive)+"' '"+toSlash(sums)+"' 'rowshape_9.9.9_linux_arm64.tar.gz'")
+		if ok {
+			t.Errorf("an unlisted asset must be refused, got success: %s", out)
+		}
+		if !strings.Contains(out, "no entry in checksums.txt") {
+			t.Errorf("the refusal must say why, got: %s", out)
+		}
+	})
+
+	t.Run("selects the right line out of many", func(t *testing.T) {
+		out, ok := run(t, "rowshape_expected_sum '"+toSlash(sums)+"' '"+asset+"'")
+		if !ok {
+			t.Fatalf("rowshape_expected_sum failed: %s", out)
+		}
+		if got := strings.TrimSpace(out); got != good {
+			t.Errorf("expected_sum = %q, want %q", got, good)
+		}
+	})
+
+	// A substring match would let an entry for a longer filename satisfy a
+	// shorter one, so the name is compared as a whole field.
+	t.Run("a filename merely containing the asset name does not satisfy it", func(t *testing.T) {
+		sneaky := filepath.Join(dir, "sneaky.txt")
+		if err := os.WriteFile(sneaky, []byte(strings.Repeat("2", 64)+"  prefix_"+asset+"_suffix.tar.gz\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, _ := run(t, "rowshape_expected_sum '"+toSlash(sneaky)+"' '"+asset+"'")
+		if strings.TrimSpace(out) != "" {
+			t.Errorf("a substring filename must not match, got %q", strings.TrimSpace(out))
+		}
+	})
+
+	t.Run("sha256 helper agrees with crypto/sha256", func(t *testing.T) {
+		out, ok := run(t, "rowshape_sha256 '"+toSlash(archive)+"'")
+		if !ok {
+			t.Fatalf("rowshape_sha256 failed: %s", out)
+		}
+		got := strings.TrimSpace(out)
+		if got == "" {
+			t.Skip("no sha256 tool on this machine")
+		}
+		if !strings.EqualFold(got, good) {
+			t.Errorf("rowshape_sha256 = %q, want %q", got, good)
+		}
+	})
+}
+
+// TestRunRefusesConflictingTargets: `target` and `ephemeral` are documented
+// mutually exclusive, but run.sh appended both and validate silently preferred
+// --target — so an ambiguous request resolved toward the mode that WRITES TO A
+// LIVE DATABASE, with no diagnostic. An ambiguous instruction about which
+// database gets written to is not something to guess at.
+func TestRunRefusesConflictingTargets(t *testing.T) {
+	r := invoke(t, map[string]string{
+		"STUB_VERDICT":     "PASS",
+		"INPUT_FIXTURE":    "rowshape.yaml",
+		"INPUT_MIGRATIONS": "migrations",
+		"INPUT_TARGET":     "postgres://live/prod",
+		"INPUT_EPHEMERAL":  "postgres://disposable/ci",
+	})
+	if r.exit != 3 {
+		t.Errorf("job exit = %d, want 3 (tool error) when both target and ephemeral are set", r.exit)
+	}
+	if !strings.Contains(r.combined, "mutually exclusive") {
+		t.Errorf("the refusal must explain itself, got: %s", r.combined)
+	}
+	// Crucially, validate must never have been invoked at all.
+	if strings.Contains(r.stubArgs, "--target") {
+		t.Errorf("validate must not run on a conflicting request, got args: %q", r.stubArgs)
+	}
+}
+
+// TestRunBooleanInputsAreStrict: warn-as-fail and json compared against the
+// literal "true", so True/TRUE/yes/1 silently read as false. On warn-as-fail
+// that is a gating knob failing OPEN — a user asking for more strictness got
+// less. Common spellings are now honored and unrecognized values are refused
+// rather than defaulting to the permissive branch.
+func TestRunBooleanInputsAreStrict(t *testing.T) {
+	truthy := []string{"true", "True", "TRUE", "yes", "1", "on"}
+	for _, v := range truthy {
+		t.Run("truthy_"+v, func(t *testing.T) {
+			r := invoke(t, map[string]string{
+				"STUB_VERDICT":       "WARN",
+				"INPUT_WARN_AS_FAIL": v,
+				"INPUT_FIXTURE":      "rowshape.yaml",
+			})
+			if !strings.Contains(r.stubArgs, "--warn-fail") {
+				t.Errorf("warn-as-fail=%q must forward --warn-fail, got args: %q", v, r.stubArgs)
+			}
+		})
+	}
+	for _, v := range []string{"false", "False", "no", "0", "off", ""} {
+		t.Run("falsy_"+v, func(t *testing.T) {
+			r := invoke(t, map[string]string{
+				"STUB_VERDICT":       "WARN",
+				"INPUT_WARN_AS_FAIL": v,
+				"INPUT_FIXTURE":      "rowshape.yaml",
+			})
+			if strings.Contains(r.stubArgs, "--warn-fail") {
+				t.Errorf("warn-as-fail=%q must not forward --warn-fail, got args: %q", v, r.stubArgs)
+			}
+		})
+	}
+	t.Run("garbage is refused, not treated as false", func(t *testing.T) {
+		r := invoke(t, map[string]string{
+			"STUB_VERDICT":       "PASS",
+			"INPUT_WARN_AS_FAIL": "maybe",
+			"INPUT_FIXTURE":      "rowshape.yaml",
+		})
+		if r.exit != 3 {
+			t.Errorf("job exit = %d, want 3 on an unparseable boolean", r.exit)
+		}
+		if !strings.Contains(r.combined, "must be true or false") {
+			t.Errorf("the refusal must explain itself, got: %s", r.combined)
+		}
+	})
+}
+
+// TestRunVerdictJSONOutputOnlyWhenWritten: the verdict-json step output was set
+// unconditionally while the file was written only under json=true, so a
+// downstream step consuming the documented output got a path to a file that was
+// never created.
+func TestRunVerdictJSONOutputOnlyWhenWritten(t *testing.T) {
+	t.Run("json enabled advertises a file that exists", func(t *testing.T) {
+		r := invoke(t, map[string]string{
+			"STUB_VERDICT":  "PASS",
+			"INPUT_JSON":    "true",
+			"INPUT_FIXTURE": "rowshape.yaml",
+		})
+		p := r.output["verdict-json"]
+		if p == "" {
+			t.Fatal("verdict-json must be set when json=true")
+		}
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("verdict-json points at a file that does not exist: %v", err)
+		}
+	})
+	t.Run("json disabled advertises nothing", func(t *testing.T) {
+		r := invoke(t, map[string]string{
+			"STUB_VERDICT":  "PASS",
+			"INPUT_JSON":    "false",
+			"INPUT_FIXTURE": "rowshape.yaml",
+		})
+		if p := r.output["verdict-json"]; p != "" {
+			t.Errorf("verdict-json = %q, want empty when json=false — the file is never written", p)
+		}
+	})
+}
+
+// TestRunMissingBinaryIsToolError: a missing binary made bash return 127, which
+// the exit mapping does not remap, so the job exited outside the documented
+// 0/1/2/3 contract. npm/bin/rowshape.js already exits 3 for the same case.
+func TestRunMissingBinaryIsToolError(t *testing.T) {
+	r := invoke(t, map[string]string{
+		"ROWSHAPE_BIN":  filepath.Join(t.TempDir(), "definitely-not-here"),
+		"INPUT_FIXTURE": "rowshape.yaml",
+	})
+	if r.exit != 3 {
+		t.Errorf("job exit = %d, want 3 (tool error) when the binary is missing", r.exit)
+	}
+	if !strings.Contains(r.combined, "could not find the rowshape binary") {
+		t.Errorf("the refusal must explain itself, got: %s", r.combined)
 	}
 }

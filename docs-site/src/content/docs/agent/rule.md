@@ -6,11 +6,11 @@ sidebar:
 ---
 
 `rowshape init --agent` writes the rule below into your `AGENTS.md` (and
-`CLAUDE.md`), inside a managed block marked `rowshape:begin v2` … `rowshape:end`.
+`CLAUDE.md`), inside a managed block marked `rowshape:begin v3` … `rowshape:end`.
 Everything outside that block is left byte-for-byte untouched, and a re-run
 replaces the block in place — so an improvement to the rule reaches repos that
 ran `init --agent` months ago. It is a versioned product artifact (currently
-**v2**), iterated against real agent sessions like a prompt.
+**v3**), iterated against real agent sessions like a prompt.
 
 This is the current text, verbatim:
 
@@ -31,10 +31,15 @@ a long tail is an outage rather than a cleanup. Guessing costs more than asking.
 compact finding codes (`RS-LOCK-001`, `RS-DATA-014`, …). Call `explain_finding`
 with a code to get the fix.
 
-**Never hand-wave a FAIL.** A FAIL is not an opinion. Either the migration was
-executed against production-shaped data and broke, or a fact measured from
-production says it will. Fix it and re-validate. Do not explain it away in the PR
-description, do not disable the check, and do not ask a human to accept it.
+**Know what it checked.** `validate_migration` is STATIC: it reasons about your
+SQL against the fixture and runs nothing. A PASS means "nothing in the shape
+contradicts this", not "this ran". `rowshape validate` in CI hydrates and
+applies — that is the stronger check.
+
+**Never hand-wave a FAIL.** A FAIL is not an opinion — it rests on a fact
+measured from production, and the finding names that fact. Fix it and
+re-validate. Do not explain it away in the PR description, do not disable the
+check, and do not ask a human to accept it.
 
 **A WARN is not a pass.** WARN means the verdict rests on a fact rowshape could
 not prove — usually a statistic it could only estimate. The finding names the

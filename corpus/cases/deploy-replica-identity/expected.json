@@ -1,0 +1,10 @@
+{
+  "description": "REPLICA IDENTITY NOTHING — RS-DEPLOY-002 WARN. The database is left healthy; what breaks is outside it, silently, in whatever consumes this table's changes.",
+  "verdict": "WARN",
+  "findings": [
+    {
+      "code": "RS-DEPLOY",
+      "severity": "warn"
+    }
+  ]
+}

@@ -62,13 +62,32 @@ tables:
 	if ec, _ := out["exit_code"].(float64); int(ec) != verdict.ExitWarnOnly {
 		t.Errorf("exit_code = %v, want %d (WARN-only)", out["exit_code"], verdict.ExitWarnOnly)
 	}
+	// Assert the SPECIFIC code rather than a count. The claim under test is that
+	// capping keeps an unproven fact from reporting PASS, and a count is only a
+	// proxy for that — a fragile one, since a correct additional finding (the
+	// ADD CONSTRAINT here also builds an index under ACCESS EXCLUSIVE) reads as
+	// a regression. The compact-shape check below now runs over EVERY finding
+	// rather than just the first, which makes this test stricter than the count
+	// version it replaces.
 	findings, _ := out["findings"].([]any)
-	if len(findings) != 1 {
-		t.Fatalf("expected 1 finding, got %d", len(findings))
+	if len(findings) == 0 {
+		t.Fatal("expected at least one finding")
 	}
-	f0 := findings[0].(map[string]any)
-	if f0["code"] != "RS-DATA-014" {
-		t.Errorf("code = %v, want RS-DATA-014", f0["code"])
+	var f0 map[string]any
+	for _, raw := range findings {
+		m, _ := raw.(map[string]any)
+		if m["code"] == "RS-DATA-014" {
+			f0 = m
+		}
+	}
+	if f0 == nil {
+		t.Fatalf("RS-DATA-014 not among the findings: %+v", findings)
+	}
+	for _, raw := range findings {
+		m, _ := raw.(map[string]any)
+		if _, has := m["remediation"]; has {
+			t.Errorf("compact finding %v must not inline remediation prose", m["code"])
+		}
 	}
 	// Compact: the finding carries a code and an explain path, NOT remediation prose.
 	if _, hasRemediation := f0["remediation"]; hasRemediation {
@@ -120,8 +139,19 @@ tables:
 	if f0["code"] != "RS-LOCK-001" {
 		t.Errorf("code = %v, want RS-LOCK-001", f0["code"])
 	}
-	if f0["bucket"] == nil || f0["bucket"] == "" {
-		t.Errorf("RS-LOCK finding should carry a duration bucket, got %v", f0["bucket"])
+	// NO duration bucket, and that is the correct answer.
+	//
+	// validate_migration is STATIC: it parses the SQL and runs the analyzers
+	// against the fixture, executing nothing. There is therefore no measured
+	// basis, and estimateFor now declines rather than defaulting basisMs to 1ms
+	// and scaling that non-measurement by the row ratio.
+	//
+	// This assertion used to require a bucket, and it passed only because of that
+	// fabrication — which means the AGENT surface was handing a model a confident
+	// duration prediction derived from a measurement that never happened. Of all
+	// the places to invent a number, the one built for agents is the worst.
+	if b, present := f0["bucket"]; present && b != nil && b != "" {
+		t.Errorf("static analysis has no measured basis, so it must carry no duration bucket, got %v", b)
 	}
 }
 
@@ -141,5 +171,73 @@ tables:
 	}
 	if out["verdict"] == nil {
 		t.Error("expected a verdict from a migration file path")
+	}
+}
+
+// TestCappedWarnCarriesItsResolveCommand closes a dead end in the wedge loop.
+//
+// The agent rule tells the agent: "A WARN is not a pass ... The finding names
+// the command that resolves it. Run that command." Over MCP that was
+// unfollowable. verdict.Engine.ResolveCommand produces a command parameterized
+// by THIS run's weakest fact — `rowshape pull --exact public.users.email` — and
+// compactFinding had no field for it, while explain_finding returns a static
+// catalog entry that cannot know the run. So on every confidence-capped WARN the
+// agent was instructed to run a command it could not see, from either tool.
+func TestCappedWarnCarriesItsResolveCommand(t *testing.T) {
+	cs := connectClient(t)
+	dir := t.TempDir()
+	// Uniqueness only ESTIMATED, so ADD UNIQUE caps to WARN rather than certifying.
+	fx := writeFile2(t, dir, "rowshape.yaml", `rowshape_fixture: "1"
+meta: {id: t, engine: {name: postgres, version: "16"}}
+tables:
+  public.users:
+    rows: {value: 800000, confidence: exact}
+    columns:
+      email: {type: text, nullable: false, distinct: {value: 799000, confidence: estimated}}
+`)
+	_, out := callValidate(t, cs, fx, "ALTER TABLE public.users ADD CONSTRAINT u UNIQUE (email);")
+
+	findings, _ := out["findings"].([]any)
+	if len(findings) == 0 {
+		t.Fatal("expected at least one finding")
+	}
+	var resolve string
+	for _, raw := range findings {
+		m, _ := raw.(map[string]any)
+		if m["code"] == "RS-DATA-014" {
+			resolve, _ = m["resolve"].(string)
+		}
+	}
+	if resolve == "" {
+		t.Fatal("a confidence-capped WARN must carry the command that resolves it, or the rule's " +
+			"instruction to run that command is unfollowable over MCP")
+	}
+	// It must be the PARAMETERIZED command, not generic advice — that is exactly
+	// what explain_finding could never supply.
+	if !strings.Contains(resolve, "--exact") || !strings.Contains(resolve, "email") {
+		t.Errorf("resolve = %q, want the run-specific `rowshape pull --exact <weakest fact>`", resolve)
+	}
+}
+
+// A finding that rests on nothing weak must not carry a resolve command, or the
+// field becomes noise on every finding.
+func TestUncappedFindingHasNoResolveCommand(t *testing.T) {
+	cs := connectClient(t)
+	dir := t.TempDir()
+	fx := writeFile2(t, dir, "rowshape.yaml", `rowshape_fixture: "1"
+meta: {id: t, engine: {name: postgres, version: "16"}}
+tables:
+  public.users:
+    rows: {value: 800000, confidence: exact}
+    columns:
+      email: {type: text, nullable: false, unique: {value: true, confidence: exact, via: constraint}}
+`)
+	_, out := callValidate(t, cs, fx, "ALTER TABLE public.users ADD CONSTRAINT u UNIQUE (email);")
+	findings, _ := out["findings"].([]any)
+	for _, raw := range findings {
+		m, _ := raw.(map[string]any)
+		if r, _ := m["resolve"].(string); r != "" {
+			t.Errorf("finding %v rests on exact facts and must carry no resolve command, got %q", m["code"], r)
+		}
 	}
 }

@@ -142,7 +142,7 @@ func applyOne(ctx context.Context, conn *pgx.Conn, sql string) Statement {
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		st.ErrCode = "TXBEGIN"
-		st.ErrMsg = err.Error()
+		st.ErrMsg = scrubQuoted(err.Error())
 		return st
 	}
 	start := time.Now()
@@ -170,14 +170,136 @@ func recordResult(st *Statement, tag pgconn.CommandTag, err error) {
 		var pgErr *pgconn.PgError
 		if asPgError(err, &pgErr) {
 			st.ErrCode = pgErr.Code
-			st.ErrMsg = pgErr.Message
+			st.ErrMsg = errMessage(pgErr)
 		} else {
 			st.ErrCode = "EXEC"
-			st.ErrMsg = err.Error()
+			st.ErrMsg = scrubQuoted(err.Error())
 		}
 		return
 	}
 	st.RowsAffected = tag.RowsAffected()
+}
+
+// errMessage renders a Postgres error for the capture WITHOUT carrying row
+// values out of the database.
+//
+// Postgres puts data values in the PRIMARY message for a whole class of errors —
+//
+//	invalid input syntax for type integer: "hunter2"
+//	value "..." is out of range for type integer
+//	date/time field value out of range: "..."
+//
+// and ErrMsg is serialized into the verdict JSON and printed to stderr by
+// cmd/validate.go. On the --target ground-truth path those are PRODUCTION values
+// landing in a CI log and a build artifact, which falsifies INV-NO-ROWS. (The
+// code already avoided pgErr.Detail, so the risk was clearly considered; the
+// Message case was missed. Where and InternalQuery can carry values too and are
+// likewise not used.)
+//
+// Quoted runs are replaced wholesale rather than guessed at, because a value and
+// an identifier are quoted identically and telling them apart from the text is
+// not reliable. That would also throw away the identifiers, which are genuinely
+// useful and are NOT sensitive — a column or table name is schema, which
+// rowshape already publishes in fixtures — so they are added back from the
+// structured fields Postgres provides separately. The diagnostic shape survives:
+//
+//	invalid input syntax for type integer: "…" [relation users, column age]
+func errMessage(e *pgconn.PgError) string {
+	msg := e.Message
+	if scrubsValues(e.Code) {
+		msg = scrubQuoted(msg)
+	}
+	var ctx []string
+	if e.SchemaName != "" && e.SchemaName != "public" {
+		ctx = append(ctx, "schema "+e.SchemaName)
+	}
+	if e.TableName != "" {
+		ctx = append(ctx, "relation "+e.TableName)
+	}
+	if e.ColumnName != "" {
+		ctx = append(ctx, "column "+e.ColumnName)
+	}
+	if e.ConstraintName != "" {
+		ctx = append(ctx, "constraint "+e.ConstraintName)
+	}
+	if e.DataTypeName != "" {
+		ctx = append(ctx, "type "+e.DataTypeName)
+	}
+	if len(ctx) == 0 {
+		return msg
+	}
+	return msg + " [" + strings.Join(ctx, ", ") + "]"
+}
+
+// scrubsValues reports whether a SQLSTATE's primary message can embed a ROW
+// VALUE, and therefore has to be scrubbed.
+//
+// Scrubbing unconditionally was too blunt. It cost the diagnostic for the two
+// failures an operator hits most, neither of which carries row data:
+//
+//	42601  syntax error at or near "ALTER"   ->  ... at or near "…"
+//	42703  column "emial" does not exist     ->  column "…" does not exist
+//
+// The quoted token in class 42 is a SQL identifier or a keyword from the user's
+// OWN migration file — the misspelling in that third example is the entire
+// content of the diagnostic — and a relation or column name is schema, which
+// rowshape already publishes in fixtures. Blanking it protected nothing and hid
+// the answer.
+//
+// The list is an ALLOWLIST of classes known to carry no values, so an
+// unrecognized or future SQLSTATE is scrubbed by default: this fails closed,
+// which is the right direction for INV-NO-ROWS.
+func scrubsValues(code string) bool {
+	if len(code) < 2 {
+		return true // unknown shape: scrub
+	}
+	switch code[:2] {
+	case "42", // syntax error or access rule violation - identifiers and SQL tokens
+		"3D", // invalid catalog name
+		"3F", // invalid schema name
+		"26", // invalid SQL statement name
+		"34", // invalid cursor name
+		"08", // connection exception
+		"53", // insufficient resources
+		"57", // operator intervention
+		"58": // system error
+		return false
+	}
+	// Everything else is scrubbed. The classes that matter most here are 22
+	// (data exception: "invalid input syntax for type integer: \"...\"") and 23
+	// (integrity constraint violation), which embed values directly.
+	return true
+}
+
+// scrubQuoted replaces the contents of every quoted run with an ellipsis, so a
+// message keeps its shape while carrying no literal out of the database.
+//
+// Both quote styles are handled: Postgres quotes identifiers and values with
+// double quotes and some messages use single quotes. An unterminated quote is
+// treated as running to the end of the string — the conservative reading, since
+// the alternative emits the tail verbatim.
+func scrubQuoted(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '"' && c != '\'' {
+			b.WriteByte(c)
+			continue
+		}
+		// Copy the opening quote, skip to the matching close, emit a placeholder.
+		b.WriteByte(c)
+		j := i + 1
+		for j < len(s) && s[j] != c {
+			j++
+		}
+		b.WriteString("…")
+		if j < len(s) {
+			b.WriteByte(c) // closing quote
+		}
+		i = j
+	}
+	return b.String()
 }
 
 // strongestLock reads the strongest relation lock the current transaction holds,

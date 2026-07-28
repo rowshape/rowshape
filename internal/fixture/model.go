@@ -135,11 +135,21 @@ type Column struct {
 	Generated string `yaml:"generated,omitempty"` // e.g. identity
 	Format    string `yaml:"format,omitempty"`    // a §6.3 format class
 
-	Length      *Length    `yaml:"length,omitempty"`
-	Values      []string   `yaml:"values,omitempty"`      // privacy: permissive only (§8.2)
-	Frequencies []float64  `yaml:"frequencies,omitempty"` // parallels Values
-	Range       *Range     `yaml:"range,omitempty"`       // MUST NOT appear on text/bytea (§6.1)
-	Histogram   *Histogram `yaml:"histogram,omitempty"`   // privacy: standard+ (§8.2)
+	Length      *Length   `yaml:"length,omitempty"`
+	Values      []string  `yaml:"values,omitempty"`      // privacy: permissive only (§8.2)
+	Frequencies []float64 `yaml:"frequencies,omitempty"` // parallels Values
+	// SampleN is how many sampled values Values/Frequencies were derived from.
+	// Frequencies are sample proportions, so the k-anonymity gate (§8.2) needs
+	// the denominator to recover an OBSERVED occurrence count; without it the
+	// gate can only multiply a proportion by an estimated row count, which
+	// cannot resolve below 1/SampleN and so never rejects on a large table.
+	// Deliberately not serialized: it is gate scaffolding, not a published
+	// fact, and keeping it out of the YAML keeps the canonical digest (§11)
+	// unchanged. A fixture read back from disk therefore has SampleN == 0,
+	// which the gate treats as "unverifiable" and withholds.
+	SampleN   int        `yaml:"-"`
+	Range     *Range     `yaml:"range,omitempty"`     // MUST NOT appear on text/bytea (§6.1)
+	Histogram *Histogram `yaml:"histogram,omitempty"` // privacy: standard+ (§8.2)
 	// Shape carries a JSON key skeleton (key names, depth, leaf types) for a
 	// jsonb_shape column — never leaf values (RFC §6.3).
 	Shape any `yaml:"shape,omitempty"`
@@ -296,7 +306,42 @@ func Parse(data []byte) (*Fixture, error) {
 	if err := f.checkVersion(); err != nil {
 		return nil, err
 	}
+	if err := f.checkEngine(); err != nil {
+		return nil, err
+	}
 	return &f, nil
+}
+
+// EngineError is returned when a fixture declares an engine this build cannot
+// reason about. It is a distinct type so a caller can map it to the right
+// tool-error category rather than reporting a generic parse failure.
+type EngineError struct{ Got string }
+
+func (e *EngineError) Error() string {
+	return "unsupported engine " + e.Got + ": this build understands postgres only. " +
+		"Every cost model, lock rule and finding in the catalog is Postgres-specific, so a verdict " +
+		"computed for another engine would be wrong rather than merely incomplete"
+}
+
+// checkEngine refuses a fixture whose engine this build does not model.
+//
+// Nothing branched on meta.engine.name. It was written by pull (hardcoded to
+// "postgres") and then never read — while estimate.Major parses engine.version as
+// a POSTGRES major unconditionally. So a MySQL 8.0 fixture would have been read
+// as "PG 8", routed through Postgres cost models, and produced a confident
+// verdict about lock behaviour that does not exist in InnoDB. That is a WRONG
+// ANSWER, not a missing feature, and it is the worst kind: fluent and specific.
+//
+// An EMPTY name is permitted. Hand-authored and older fixtures legitimately omit
+// meta.engine, and the version gate (RFC §9.1) already declines to extrapolate
+// without a version — so absence is handled honestly elsewhere. This refuses only
+// a name that is present and is NOT one this build models.
+func (f *Fixture) checkEngine() error {
+	name := strings.ToLower(strings.TrimSpace(f.Meta.Engine.Name))
+	if name == "" || name == "postgres" || name == "postgresql" {
+		return nil
+	}
+	return &EngineError{Got: f.Meta.Engine.Name}
 }
 
 // Marshal encodes a fixture to YAML. This is a straightforward serialization;

@@ -20,6 +20,7 @@ func richColumn() fixture.Column {
 		Histogram:    &fixture.Histogram{Buckets: 4, Bounds: []any{0, 1, 2, 3}},
 		Values:       []string{"active", "trialing", "canceled"},
 		Frequencies:  []float64{0.5, 0.3, 0.2},
+		SampleN:      500, // the k-gate counts observations: 0.5/0.3/0.2 -> 250/150/100
 		NullFraction: &fixture.Fact[float64]{Value: 0.0, Confidence: fixture.Estimated},
 	}
 }
@@ -76,7 +77,7 @@ func TestPrivacyFieldMatrix(t *testing.T) {
 	})
 
 	t.Run("permissive_keeps_safe_values", func(t *testing.T) {
-		f := fixtureWith(richColumn(), 1000) // freqs 0.5/0.3/0.2 * 1000 = 500/300/200 >= 20
+		f := fixtureWith(richColumn(), 1000) // observed 250/150/100 in a 500-row sample, all >= 20
 		ApplyPrivacy(f, PrivacyPermissive, 0)
 		c := f.Tables["public.t"].Columns["c"]
 		if len(c.Values) != 3 || len(c.Frequencies) != 3 {
@@ -90,7 +91,7 @@ func TestPrivacyFieldMatrix(t *testing.T) {
 func TestPermissiveKThreshold(t *testing.T) {
 	t.Run("rare_value_dropped", func(t *testing.T) {
 		col := richColumn()
-		// One value at 0.001 * 1000 = 1 occurrence, below k=20.
+		// One value seen 0.001 * 500 = 0.5 -> 1 time in the sample, below k=20.
 		col.Frequencies = []float64{0.5, 0.499, 0.001}
 		f := fixtureWith(col, 1000)
 		ApplyPrivacy(f, PrivacyPermissive, 20)
@@ -111,11 +112,42 @@ func TestPermissiveKThreshold(t *testing.T) {
 
 	t.Run("custom_k", func(t *testing.T) {
 		col := richColumn()
-		col.Frequencies = []float64{0.5, 0.3, 0.2} // min 0.2*100 = 20 occurrences
+		col.Frequencies = []float64{0.5, 0.3, 0.2}
+		col.SampleN = 100 // min observed = 0.2 * 100 = 20 occurrences
 		f := fixtureWith(col, 100)
 		ApplyPrivacy(f, PrivacyPermissive, 25) // require 25; 20 < 25 -> drop
 		if f.Tables["public.t"].Columns["c"].Values != nil {
 			t.Errorf("k=25 with a 20-count value must suppress the set")
+		}
+	})
+
+	// Regression: the gate used to score a value as frequency × declared rows.
+	// Because a frequency resolves no finer than 1/SampleN, that product grows
+	// with the table and crossed k=20 at 10,000 rows — so a value seen exactly
+	// ONCE in the sample was published verbatim from any larger table, and the
+	// gate got weaker precisely as re-identification risk got worse.
+	t.Run("singleton_suppressed_at_every_table_size", func(t *testing.T) {
+		for _, rows := range []int64{1_000, 9_999, 10_001, 100_000_000} {
+			col := richColumn()
+			// "canceled" seen once in a 500-row sample; the others make up the rest.
+			col.Frequencies = []float64{0.5, 0.498, 0.002}
+			f := fixtureWith(col, rows)
+			ApplyPrivacy(f, PrivacyPermissive, 20)
+			if got := f.Tables["public.t"].Columns["c"].Values; got != nil {
+				t.Errorf("rows=%d: a value seen once in the sample must never be published, got %v", rows, got)
+			}
+		}
+	})
+
+	// A fixture read back from disk has no SampleN (it is not serialized), so
+	// the observed count cannot be recovered. The gate must fail closed.
+	t.Run("missing_sample_size_fails_closed", func(t *testing.T) {
+		col := richColumn()
+		col.SampleN = 0
+		f := fixtureWith(col, 1000)
+		ApplyPrivacy(f, PrivacyPermissive, 20)
+		if f.Tables["public.t"].Columns["c"].Values != nil {
+			t.Errorf("without a sample size the gate must withhold, not guess")
 		}
 	})
 }

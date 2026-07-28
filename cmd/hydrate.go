@@ -41,7 +41,7 @@ func newHydrateCmd() *cobra.Command {
 			if len(args) == 1 {
 				opts.fixturePath = args[0]
 			}
-			return runHydrate(opts)
+			return runHydrate(cmd.Context(), opts)
 		},
 	}
 	f := cmd.Flags()
@@ -54,7 +54,17 @@ func newHydrateCmd() *cobra.Command {
 	return cmd
 }
 
-func runHydrate(opts *hydrateOptions) error {
+func runHydrate(ctx context.Context, opts *hydrateOptions) error {
+	// Same refusal as validate: --target is a LIVE database this writes into and
+	// --ephemeral is a disposable one, so resolving the conflict silently would
+	// let the destructive option win an ambiguity the user never saw. validate
+	// got this guard first; hydrate writes MORE than validate does, so leaving
+	// it out here was the more dangerous half to miss.
+	if opts.target != "" && opts.ephemeral != "" {
+		fmt.Fprintln(os.Stderr, "rowshape hydrate: --target and --ephemeral are mutually exclusive")
+		fmt.Fprintln(os.Stderr, "rowshape hydrate: pass exactly one: --target writes to a live database, --ephemeral uses a disposable one")
+		return toolError()
+	}
 	data, err := os.ReadFile(opts.fixturePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rowshape hydrate: reading %s failed: %v\n", opts.fixturePath, err)
@@ -70,7 +80,7 @@ func runHydrate(opts *hydrateOptions) error {
 
 	// If a live target is requested, load rows into it instead of emitting SQL.
 	if opts.target != "" || opts.ephemeral != "" {
-		return loadIntoTarget(f, genOpts, opts)
+		return loadIntoTarget(ctx, f, genOpts, opts)
 	}
 
 	res, err := hydrate.Generate(f, genOpts)
@@ -146,8 +156,7 @@ func checkHydrateHost(f *fixture.Fixture, opts *hydrateOptions) error {
 // loadIntoTarget hydrates directly into a live database: a user-provided one
 // (--target) or a disposable ephemeral database created and dropped for the run
 // (--ephemeral). Connection strings and credentials are never logged.
-func loadIntoTarget(f *fixture.Fixture, genOpts hydrate.Options, opts *hydrateOptions) error {
-	ctx := context.Background()
+func loadIntoTarget(ctx context.Context, f *fixture.Fixture, genOpts hydrate.Options, opts *hydrateOptions) error {
 
 	// Refuse BEFORE anything is created or connected. This has to precede
 	// target.NewEphemeral, which itself issues a CREATE DATABASE on the admin
@@ -170,7 +179,13 @@ func loadIntoTarget(f *fixture.Fixture, genOpts hydrate.Options, opts *hydrateOp
 		// A disposable target is always torn down, even on failure.
 		// A disposable target is always torn down, and a failure to do so is
 		// reported rather than discarded (CR-T19) — without changing the exit code.
-		defer func() { warnTeardown("hydrate", eph.Close(ctx)) }()
+		defer func() {
+			// Detached from ctx — see the note in validate.go: cancellation must
+			// stop the work and still permit the cleanup.
+			tctx, tcancel := target.TeardownContext(ctx)
+			defer tcancel()
+			warnTeardown("hydrate", eph.Close(tctx))
+		}()
 		t = eph
 	}
 

@@ -20,9 +20,22 @@ type rawSQLRunner struct {
 
 func (r *rawSQLRunner) Kind() Kind { return RawSQL }
 
+// Binary is the executable ApplyCmd shells out to. psql is frequently absent on
+// Windows even where Postgres itself is installed.
+func (r *rawSQLRunner) Binary() string { return "psql" }
+
 // Files returns the migration file names in apply order (exposed for tests and
 // for the caller to report what will run).
 func (r *rawSQLRunner) Files() []string { return r.files }
+
+// Dir returns the directory the names from Files() are relative to. Detection
+// descends into the conventional locations (migrations/, db/migrations/, …), so
+// this is NOT necessarily the path the user passed to --migrations: pointing at
+// a repo root with files in ./migrations/ yields dir=./migrations. Callers that
+// resolve Files() against the user's path instead of this one build paths that
+// do not exist. ApplyCmd has always used it as cmd.Dir; Dir exposes the same
+// base to callers that read the files themselves.
+func (r *rawSQLRunner) Dir() string { return r.dir }
 
 // ApplyCmd runs `psql` against the target, applying each file in order under a
 // single connection with ON_ERROR_STOP so a failure halts immediately rather

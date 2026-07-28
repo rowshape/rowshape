@@ -28,10 +28,19 @@ import (
 // rule now says "not an opinion" and names both grounds, which is just as
 // forceful and has the advantage of being true.
 //
+// v3: the rule told the agent a FAIL meant "the migration was executed against
+// production-shaped data and broke". That is true of `rowshape validate` in a
+// shell, which hydrates and applies — but the rule directs the agent at the MCP
+// tool `validate_migration`, which is STATIC and executes nothing. So the one
+// file the agent actually reads described a check the tool it was told to call
+// does not perform, and invited it to read a PASS as "this ran". The rule now
+// says plainly what the static check covers and names the stronger one. Same
+// class of correction as v2, in the place where it matters most.
+//
 // It is a plain integer, not semver: there is no such thing as a
 // backward-incompatible prompt, and the only question a consumer ever asks is
 // "is this older than what I ship?".
-const Version = 2
+const Version = 3
 
 // Text is the rule itself, embedded so the binary is self-contained (PRD §7:
 // single static binary, no runtime).

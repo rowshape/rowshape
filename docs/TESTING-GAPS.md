@@ -38,8 +38,17 @@ and `validate/capture.go` are the two big offenders.
 - Without the DSN, the DB-backed suites skip and `go test` still prints `ok` —
   the documented "green that hides coverage." `scripts/verify-all.sh` is the
   guard against mistaking it for a full run. ✔
-- **All 14 finding codes** in `internal/findings/registry.go` are produced by at
-  least one unit test. There is *no* "a finding code is never exercised" gap. ✔
+- **Every finding code** in `internal/findings/registry.go` is produced by at
+  least one unit test, and — since phase-cr4 — by at least one *corpus* case too,
+  which is what exercises it against a real Postgres in CI. ✔
+
+  This used to read "all 14 finding codes". It was true when written and stopped
+  being true silently: by the time there were 26 codes, six were covered only by
+  unit tests. A prose claim in a markdown file cannot notice when it expires, so
+  it is now enforced by `TestEveryFindingCodeHasACorpusCase` in
+  `corpus/harness/coverage_test.go`. Codes with a deliberate exemption are listed
+  there with the reason, and the test fails if an exempt code *becomes* covered —
+  so the list cannot rot in either direction.
 
 ## The testing surfaces — what exists
 

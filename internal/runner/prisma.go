@@ -14,6 +14,10 @@ type prismaRunner struct {
 
 func (p *prismaRunner) Kind() Kind { return Prisma }
 
+// Binary is the executable ApplyCmd shells out to. On Windows this resolves to
+// prisma.CMD via PATHEXT, which exec.LookPath honors.
+func (p *prismaRunner) Binary() string { return "prisma" }
+
 // ApplyCmd runs `prisma migrate deploy` — the non-interactive apply Prisma
 // intends for CI. Prisma reads its target from DATABASE_URL, its own convention.
 func (p *prismaRunner) ApplyCmd(ctx context.Context, dsn string) *exec.Cmd {

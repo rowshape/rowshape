@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -50,7 +51,7 @@ func TestHydrateRefusesSourceHostTarget(t *testing.T) {
 		scale:       1.0,
 	}
 	var runErr error
-	_, stderr := captureOutput(t, func() error { runErr = runHydrate(opts); return runErr })
+	_, stderr := captureOutput(t, func() error { runErr = runHydrate(context.Background(), opts); return runErr })
 
 	if !strings.Contains(stderr, "refusing to hydrate into the fixture's source host") {
 		t.Errorf("expected a host-match refusal on stderr, got:\n%s", stderr)
@@ -78,7 +79,7 @@ func TestHydrateRefusesSourceHostEphemeral(t *testing.T) {
 		scale:       1.0,
 	}
 	var runErr error
-	_, stderr := captureOutput(t, func() error { runErr = runHydrate(opts); return runErr })
+	_, stderr := captureOutput(t, func() error { runErr = runHydrate(context.Background(), opts); return runErr })
 
 	if !strings.Contains(stderr, "refusing to hydrate into the fixture's source host") {
 		t.Errorf("expected a host-match refusal on stderr, got:\n%s", stderr)
@@ -103,7 +104,7 @@ func TestHydrateAllowsNonSourceHost(t *testing.T) {
 		scale:       1.0,
 	}
 	var runErr error
-	_, stderr := captureOutput(t, func() error { runErr = runHydrate(opts); return runErr })
+	_, stderr := captureOutput(t, func() error { runErr = runHydrate(context.Background(), opts); return runErr })
 
 	if strings.Contains(stderr, "refusing to hydrate") {
 		t.Errorf("must NOT refuse a host the fixture did not come from:\n%s", stderr)
@@ -236,7 +237,7 @@ func TestHydrateTargetFailureHidesConnectionDetails(t *testing.T) {
 	opts := &hydrateOptions{fixturePath: fx, target: leakDSN, scale: 1.0}
 
 	var runErr error
-	stdout, stderr := captureOutput(t, func() error { runErr = runHydrate(opts); return runErr })
+	stdout, stderr := captureOutput(t, func() error { runErr = runHydrate(context.Background(), opts); return runErr })
 
 	if runErr == nil {
 		t.Fatal("expected a failure against a closed port")
@@ -260,7 +261,7 @@ func TestValidateTargetFailureHidesConnectionDetails(t *testing.T) {
 
 	for _, asJSON := range []bool{false, true} {
 		opts := &validateOptions{fixturePath: fx, migrations: mig, ephemeral: leakDSN, scale: 1.0, asJSON: asJSON}
-		stdout, stderr := captureOutput(t, func() error { return runValidate(opts) })
+		stdout, stderr := captureOutput(t, func() error { return runValidate(context.Background(), opts) })
 		assertNoLeak(t, fmt.Sprintf("validate stderr (json=%v)", asJSON), stderr)
 		assertNoLeak(t, fmt.Sprintf("validate stdout (json=%v)", asJSON), stdout)
 	}

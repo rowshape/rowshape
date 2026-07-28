@@ -14,10 +14,15 @@ a long tail is an outage rather than a cleanup. Guessing costs more than asking.
 compact finding codes (`RS-LOCK-001`, `RS-DATA-014`, …). Call `explain_finding`
 with a code to get the fix.
 
-**Never hand-wave a FAIL.** A FAIL is not an opinion. Either the migration was
-executed against production-shaped data and broke, or a fact measured from
-production says it will. Fix it and re-validate. Do not explain it away in the PR
-description, do not disable the check, and do not ask a human to accept it.
+**Know what it checked.** `validate_migration` is STATIC: it reasons about your
+SQL against the fixture and runs nothing. A PASS means "nothing in the shape
+contradicts this", not "this ran". `rowshape validate` in CI hydrates and
+applies — that is the stronger check.
+
+**Never hand-wave a FAIL.** A FAIL is not an opinion — it rests on a fact
+measured from production, and the finding names that fact. Fix it and
+re-validate. Do not explain it away in the PR description, do not disable the
+check, and do not ask a human to accept it.
 
 **A WARN is not a pass.** WARN means the verdict rests on a fact rowshape could
 not prove — usually a statistic it could only estimate. The finding names the

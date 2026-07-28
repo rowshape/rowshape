@@ -189,7 +189,7 @@ from flipping to `passes: true` (the loop rule: never fake-pass).
    - `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` — deploy the docs site
      (`.github/workflows/docs-deploy.yml`); create the Cloudflare Pages project.
 3. Push the first release tag: `git tag v0.1.0 && git push --tags` → the release
-   workflow builds all 5 platform/arch archives, SBOM + cosign, the Homebrew cask,
+   workflow builds all 6 platform/arch archives, SBOM + cosign, the Homebrew cask,
    the ghcr image, and publishes npm.
 
 **What unblocks once the org exists + a tag is published:**

@@ -1,0 +1,28 @@
+version: 2
+
+# Actions are SHA-pinned (CR2-T18), which removes the mutable-tag risk but
+# creates a maintenance one: a pin never updates itself, so a pinned action can
+# quietly rot past a security fix. Dependabot rewrites the SHA and keeps the
+# trailing `# v4` comment in step, which is the combination that makes pinning
+# sustainable rather than a one-off.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # One PR for routine bumps rather than a dozen; security updates still
+      # arrive on their own.
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /docs-site
+    schedule:
+      interval: weekly

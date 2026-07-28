@@ -1,0 +1,14 @@
+rowshape_fixture: "1"
+meta:
+  id: perf-unbatched-backfill
+  engine: {name: postgres, version: "16"}
+  privacy: standard
+  profile: {mode: fast, escalated: []}
+tables:
+  public.users:
+    rows: {value: 50000000, confidence: exact}
+    columns:
+      id: {type: bigint, nullable: false, unique: {value: true, confidence: exact, via: constraint}}
+      email: {type: text, nullable: false}
+      normalized: {type: text, nullable: true, null_fraction: {value: 0.9, confidence: estimated, via: pg_stats}}
+    constraints: [{name: users_pkey, kind: primary_key, columns: [id]}]

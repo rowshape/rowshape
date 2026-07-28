@@ -13,6 +13,10 @@ type drizzleRunner struct {
 
 func (d *drizzleRunner) Kind() Kind { return Drizzle }
 
+// Binary is the executable ApplyCmd shells out to. On Windows this resolves to
+// drizzle-kit.CMD via PATHEXT, which exec.LookPath honors.
+func (d *drizzleRunner) Binary() string { return "drizzle-kit" }
+
 // ApplyCmd runs `drizzle-kit migrate`, which applies pending migrations. The
 // target DSN is provided via DATABASE_URL, which the drizzle config resolves.
 func (d *drizzleRunner) ApplyCmd(ctx context.Context, dsn string) *exec.Cmd {

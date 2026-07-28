@@ -21,9 +21,12 @@ func newInitCmd() *cobra.Command {
 		Use:   "init",
 		Short: "Scaffold rowshape config in the current repo (offline detection only)",
 		Long: "init detects your database engine and migration runner from the repo\n" +
-			"layout and writes a starter " + configFile + " you can commit and edit. It\n" +
-			"makes no network or database connection. Re-running it leaves an existing\n" +
-			"config untouched unless you pass --force.\n\n" +
+			"layout and writes a starter " + configFile + ". It makes no network or\n" +
+			"database connection. Re-running it leaves an existing config untouched\n" +
+			"unless you pass --force.\n\n" +
+			"NOTE: " + configFile + " is currently a RECORD OF WHAT WAS DETECTED, not a\n" +
+			"settings file. No rowshape command reads it yet — every option is passed as\n" +
+			"a flag. Editing it will not change any behaviour.\n\n" +
 			"--agent additionally wires this repo for coding agents: it registers\n" +
 			"`rowshape mcp` in the MCP config of every detected client (.mcp.json for\n" +
 			"Claude Code, .cursor/mcp.json, .vscode/mcp.json). It merges into existing\n" +
@@ -68,6 +71,13 @@ func scaffoldConfig(stack detectedStack) string {
 		runnerComment = "  # not detected — set to alembic | prisma | drizzle | rawsql"
 	}
 	return `# rowshape configuration — https://rowshape.com
+#
+# NOT YET READ BY ANY COMMAND. This file records what ` + "`rowshape init`" + ` detected
+# from your repo layout, so it is useful to commit and to read — but no rowshape
+# command loads it today, and editing a value here changes nothing. Every option
+# below is passed as a flag instead (see ` + "`rowshape <command> --help`" + `).
+# The values are shown so you can see what was detected and what the defaults are.
+#
 # Commit this file; it carries no secrets. The database connection comes from the
 # standard libpq environment variables (PGHOST, PGUSER, ...) or a URL passed to
 # ` + "`rowshape pull`" + `. init detected this offline, from the repo layout only.

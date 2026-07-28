@@ -23,9 +23,23 @@ long-tailed foreign key is an outage, not a cleanup.
 
 ### `validate_migration`
 
-The loop-closer. Validates a migration against production-shaped data and returns
-the verdict (`PASS` / `WARN` / `FAIL`). Findings come back as compact codes
-(`RS-LOCK-001`, `RS-DATA-014`, …) — expand them with `explain_finding`.
+The loop-closer. Returns a verdict (`PASS` / `WARN` / `FAIL`) with findings as
+compact codes (`RS-LOCK-001`, `RS-DATA-014`, …) — expand them with
+`explain_finding`.
+
+:::caution[This is a static check]
+`validate_migration` parses the migration and runs the **same analyzers** as the
+CLI against the committed fixture. It does **not** hydrate a database and does
+**not** apply anything, so it produces no *runtime* facts: no measured lock
+durations, no constraint violations discovered by real data, no index-build
+timings.
+
+That makes it fast enough to sit inside an agent's turn, which is the point. But
+a `PASS` here is weaker evidence than a `PASS` from `rowshape validate` in a
+shell, which hydrates a disposable Postgres, applies the migration through your
+runner, and captures what actually happened. Use the CLI in CI; use this tool to
+steer the agent while it writes.
+:::
 
 ### `explain_finding`
 
@@ -55,5 +69,12 @@ validate_migration    →  PASS.
 A WARN is not a pass and a FAIL is not an opinion — the rule is explicit about
 both, which is what keeps the agent from hand-waving a finding into a merged PR.
 The exit codes and the `Verdict` struct are identical across the CLI, the MCP
-tools, and the [GitHub Action](../../install/), so a human reviewer and the agent
-are looking at the same answer.
+tools, and the [GitHub Action](../../reference/github-action/), so a human reviewer and the agent
+are reading the same *shape* of answer — and a tool error is distinguishable from
+a verdict on every surface, because it carries `"error": "tool_error"` and a
+category rather than a verdict field.
+
+What differs is the **evidence behind** the answer, not its shape:
+`validate_migration` is static (see the caution above) while `rowshape validate`
+hydrates and applies. Same struct, different strength of claim. Gate merges on
+the CLI or the Action; use the MCP tool to steer the agent as it writes.

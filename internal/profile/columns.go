@@ -118,6 +118,7 @@ func (r *reader) profileTable(ctx context.Context, t tableRef, tbl *fixture.Tabl
 			// nothing is gathered under standard/strict, so values can't leak.
 			if r.privacy == PrivacyPermissive {
 				col.Values, col.Frequencies = valueSetFromSample(samples)
+				col.SampleN = len(samples)
 			}
 		case "bytea":
 			// bytea gets length stats only, never a range (§6.1). opaque is the

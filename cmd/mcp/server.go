@@ -19,11 +19,18 @@ import (
 	"github.com/rowshape/rowshape/internal/fixture"
 )
 
-// serverName / serverVersion identify this server to a client in the handshake.
-const (
-	serverName    = "rowshape"
-	serverVersion = "0.1.0"
-)
+// serverName identifies this server to a client in the handshake.
+const serverName = "rowshape"
+
+// Version is the build version reported in the MCP handshake.
+//
+// It was a hardcoded "0.1.0" while the CLI's version came from ldflags, so an
+// MCP client's handshake advertised a version unrelated to the binary actually
+// answering it — and an agent that logs or branches on the server version was
+// reading a constant. `rowshape mcp` sets this from the same injected value
+// `rowshape --version` reports; "dev" matches cmd's own default for a plain
+// `go build`.
+var Version = "dev"
 
 // ToolNames are exactly the four tools the server exposes (PRD §8.2). The set is
 // closed: the server registers these and no others.
@@ -67,7 +74,7 @@ type planAgainstInput struct {
 // NewServer builds the MCP server with the four PRD §8.2 tools registered.
 func NewServer() *sdk.Server {
 	s := sdk.NewServer(
-		&sdk.Implementation{Name: serverName, Version: serverVersion, Title: "rowshape"},
+		&sdk.Implementation{Name: serverName, Version: Version, Title: "rowshape"},
 		&sdk.ServerOptions{Instructions: instructions},
 	)
 
@@ -78,7 +85,7 @@ func NewServer() *sdk.Server {
 
 	sdk.AddTool(s, &sdk.Tool{
 		Name:        "validate_migration",
-		Description: "Validate a migration against production-shaped data and return the verdict — the loop-closer. Findings come back as compact codes; expand them with explain_finding.",
+		Description: "STATIC check against the committed fixture: same analyzers and Verdict shape as the CLI, but nothing is hydrated or applied, so there are no runtime facts. Run `rowshape validate` for hydrate-and-apply. Findings are codes; expand with explain_finding.",
 	}, handleValidateMigration)
 
 	sdk.AddTool(s, &sdk.Tool{

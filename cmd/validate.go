@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/rowshape/rowshape/internal/dsn"
 	"github.com/rowshape/rowshape/internal/fixture"
 	"github.com/rowshape/rowshape/internal/hydrate"
 	"github.com/rowshape/rowshape/internal/runner"
@@ -33,6 +35,7 @@ type validateOptions struct {
 	seed        int64
 	scale       float64
 	maxRows     int64
+	iKnowTarget bool // acknowledge that --target is written to and committed
 }
 
 // newValidateCmd applies a proposed migration against a hydrated disposable
@@ -51,29 +54,30 @@ func newValidateCmd() *cobra.Command {
 			"verdict. Against a provided live branch (--target) the facts are ground\n" +
 			"truth. validate never touches the fixture's source database.",
 		Args: cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 1 {
 				opts.fixturePath = args[0]
 			}
-			return runValidate(opts)
+			return runValidate(cmd.Context(), opts)
 		},
 	}
 	f := cmd.Flags()
 	f.StringVarP(&opts.migrations, "migrations", "m", opts.migrations, "migration .sql file or directory")
 	f.StringVar(&opts.target, "target", "", "validate against this live database URL (its data is ground truth)")
 	f.StringVar(&opts.ephemeral, "ephemeral", "", "admin URL: create a disposable database, hydrate into it, then drop it")
-	f.StringVar(&opts.runnerKind, "runner", "", "override runner detection (alembic|prisma|drizzle|rawsql)")
+	f.StringVar(&opts.runnerKind, "runner", "", "override runner detection (rawsql; alembic|prisma|drizzle are DETECTED but cannot be validated yet)")
 	f.BoolVar(&opts.asJSON, "json", false, "emit the machine-readable verdict as JSON")
 	f.BoolVar(&opts.warnFail, "warn-fail", false, "exit non-zero on a WARN-only verdict")
 	f.BoolVar(&opts.calibrate, "calibrate", false, "hydrate at two scales and fit the cost curve, upgrading duration estimates to measured (slower)")
 	f.Int64Var(&opts.seed, "seed", 0, "deterministic hydration seed")
 	f.Float64Var(&opts.scale, "scale", opts.scale, "fraction of declared rows to hydrate")
 	f.Int64Var(&opts.maxRows, "max-rows", 0, "cap hydrated rows per table (0 = no cap)")
+	f.BoolVar(&opts.iKnowTarget, "i-know-target-is-writable", false,
+		"proceed with --target when the fixture records no source host to check it against")
 	return cmd
 }
 
-func runValidate(opts *validateOptions) error {
-	ctx := context.Background()
+func runValidate(ctx context.Context, opts *validateOptions) error {
 
 	data, err := os.ReadFile(opts.fixturePath)
 	if err != nil {
@@ -82,6 +86,54 @@ func runValidate(opts *validateOptions) error {
 	f, err := fixture.ParseVerified(data)
 	if err != nil {
 		return emitToolError(opts.asJSON, fixtureParseError(err))
+	}
+
+	// --target and --ephemeral name different databases with very different
+	// consequences: --target is a LIVE database this command will write to,
+	// --ephemeral is a disposable one. Giving both used to silently prefer
+	// --target, so an ambiguous request resolved toward the destructive option
+	// with no diagnostic. Refuse instead of guessing.
+	if opts.target != "" && opts.ephemeral != "" {
+		return emitToolError(opts.asJSON, toolerror.New(
+			toolerror.BadUsage,
+			"--target and --ephemeral are mutually exclusive",
+			"pass exactly one: --target writes to a live database, --ephemeral uses a disposable one",
+		))
+	}
+
+	// Refuse an unsupported migration set BEFORE standing up a target.
+	//
+	// Detection recognizes Alembic, Prisma and Drizzle projects and --runner
+	// accepts all four by name, but capture only supports raw SQL. That refusal
+	// used to happen inside applyAndCapture — i.e. AFTER a disposable database
+	// had been created, hydrated and (on the ephemeral path) was about to be
+	// dropped again. The user paid for a container and a full hydrate to be told
+	// the project is unsupported. Nothing about the check needs a database.
+	if err := checkMigrationsSupported(opts); err != nil {
+		return emitToolError(opts.asJSON, asToolError(err))
+	}
+
+	// Refuse a migration whose outcome the SANDBOX cannot represent, rather than
+	// running it and reporting a verdict about rowshape's own limitations.
+	if err := checkSandboxCanRepresent(f, opts); err != nil {
+		return emitToolError(opts.asJSON, asToolError(err))
+	}
+
+	// --calibrate fits a cost curve through two runs at DIFFERENT scales. With
+	// --max-rows set, both clamp to the same row count, the second point is
+	// identical to the first, and estimateFor's `rows2 != rows1` test silently
+	// drops back to a single-point estimate — so the user pays for a second full
+	// hydrate and gets nothing, with no diagnostic. Refused HERE, before any
+	// hydration: a flag combination that cannot work should not cost two runs to
+	// discover.
+	if opts.calibrate && opts.maxRows > 0 {
+		return emitToolError(opts.asJSON, toolerror.New(
+			toolerror.BadUsage,
+			"--calibrate cannot be combined with --max-rows",
+			"calibration fits a cost curve through two runs at DIFFERENT scales, but --max-rows clamps "+
+				"both to the same row count, so the second run adds no information. Drop --max-rows for "+
+				"the calibrated run, or drop --calibrate.",
+		))
 	}
 
 	// Resolve the target and enforce the host-match refusal BEFORE touching it.
@@ -93,9 +145,31 @@ func runValidate(opts *validateOptions) error {
 	if adminOrTarget == "" {
 		return emitToolError(opts.asJSON, toolerror.New(toolerror.BadUsage, "no target given", "provide a disposable target (--ephemeral <admin-url>) or a live target (--target <url>)"))
 	}
-	if host := hostOf(adminOrTarget); host != "" {
+	host := hostOf(adminOrTarget)
+	if host != "" {
 		if err := validate.CheckHost(f.Meta.Source, host); err != nil {
 			return emitToolError(opts.asJSON, toolerror.New(toolerror.BadUsage, err.Error(), "point --target/--ephemeral at a disposable or non-production host"))
+		}
+	}
+	// --target is the one path that WRITES: it opens a transaction, executes the
+	// migration DDL and COMMITS. Its guard must not switch itself off just because
+	// the fixture happens to carry no source to compare against.
+	if groundTruth {
+		if err := validate.CheckWriteTarget(f.Meta.Source, host, opts.iKnowTarget); err != nil {
+			return emitToolError(opts.asJSON, toolerror.New(
+				toolerror.BadUsage,
+				err.Error(),
+				"--target APPLIES AND COMMITS the migration to that database. Re-run `rowshape pull` so the "+
+					"fixture records a source host to check against, use --ephemeral for a disposable target, "+
+					"or pass --i-know-target-is-writable if you are certain this is not production",
+			))
+		}
+	}
+	// Warn on a plaintext connection to a remote host. Never to stdout: --json
+	// puts the machine-readable Verdict there and a stray line would corrupt it.
+	if cfg, err := pgx.ParseConfig(adminOrTarget); err == nil {
+		if w := dsn.InsecureWarning(cfg); w != "" {
+			fmt.Fprintf(os.Stderr, "rowshape validate: warning: %s\n", w)
 		}
 	}
 
@@ -155,7 +229,14 @@ func hydrateApplyEphemeral(ctx context.Context, f *fixture.Fixture, opts *valida
 	if err != nil {
 		return nil, toolerror.New(toolerror.TargetUnavailable, "could not create a disposable database", "check the admin connection (--ephemeral); a disposable Postgres must be reachable (PRD §17.2)")
 	}
-	defer func() { warnTeardown("validate", eph.Close(ctx)) }()
+	defer func() {
+		// Detached from ctx: on Ctrl-C the run's context is already cancelled,
+		// and Close opens a NEW connection to issue DROP DATABASE. Reusing ctx
+		// there orphaned the disposable database on the admin server.
+		tctx, tcancel := target.TeardownContext(ctx)
+		defer tcancel()
+		warnTeardown("validate", eph.Close(tctx))
+	}()
 
 	report, err := target.Load(ctx, eph, f, hydrate.Options{Seed: opts.seed, Scale: scale, MaxRows: opts.maxRows})
 	if err != nil {
@@ -181,6 +262,123 @@ func statementDurations(c *validate.Capture) []int64 {
 	return ms
 }
 
+// checkSandboxCanRepresent refuses a migration that exercises a schema feature
+// hydrate does not reproduce.
+//
+// internal/target/ddl.go emits column types and NOT NULL only: no CHECK
+// constraints, no foreign keys, and no PARTITION BY. For partitioning that is
+// not merely lossy, it is verdict-CORRUPTING in both directions. An
+// ATTACH/DETACH PARTITION statement errors against the hydrated plain table,
+// Capture.Success goes false, and BuildResult floors the whole verdict to FAIL —
+// a manufactured FAIL for a migration that is fine. (The opposite also happens:
+// ADD COLUMN on a real 400-partition parent recurses across every partition
+// under ACCESS EXCLUSIVE, where hydrated it is one instant catalog write.)
+//
+// Refusing is the honest answer while the larger fidelity question is open: a
+// tool error says "I cannot decide this", which is true, where a FAIL asserts
+// something about the migration that is not.
+//
+// Deliberately narrow. It fires only when the migration actually references
+// partitioning AND the fixture declares the table partitioned — so an ordinary
+// migration against an ordinary table is untouched, and a partitioned table that
+// the migration does not touch structurally still validates normally.
+func checkSandboxCanRepresent(f *fixture.Fixture, opts *validateOptions) error {
+	// Ground truth runs against a real database that HAS the real schema, so the
+	// sandbox's limitations do not apply.
+	if opts.target != "" {
+		return nil
+	}
+	stmts, err := migrationStatementsFor(opts)
+	if err != nil {
+		return nil // unreadable migrations surface elsewhere, with a better message
+	}
+	for _, sql := range stmts {
+		up := strings.ToUpper(collapseWS(sql))
+		if !strings.Contains(up, "ATTACH PARTITION") && !strings.Contains(up, "DETACH PARTITION") {
+			continue
+		}
+		return toolerror.New(
+			toolerror.BadUsage,
+			"this migration attaches or detaches a partition, and rowshape's disposable target does not "+
+				"reproduce partitioning",
+			"hydrate creates plain tables (no PARTITION BY), so the statement would fail against the "+
+				"sandbox and rowshape would report a FAIL about its own limitation rather than about your "+
+				"migration. Use --target against a database that has the real schema. The lock behaviour is "+
+				"still reported statically as RS-LOCK-003.",
+		)
+	}
+	return nil
+}
+
+// collapseWS reduces whitespace runs to single spaces for keyword matching.
+func collapseWS(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// migrationStatementsFor reads the migration set as raw SQL statements, or
+// returns an error if it cannot.
+func migrationStatementsFor(opts *validateOptions) ([]string, error) {
+	if isSQLFile(opts.migrations) {
+		located, err := readSQLFile(opts.migrations)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]string, 0, len(located))
+		for _, l := range located {
+			out = append(out, l.SQL)
+		}
+		return out, nil
+	}
+	r, err := detectValidateRunner(opts)
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := r.(interface {
+		Files() []string
+		Dir() string
+	})
+	if !ok {
+		return nil, fmt.Errorf("not a raw-SQL runner")
+	}
+	var out []string
+	for _, name := range raw.Files() {
+		located, err := readSQLFile(filepath.Join(raw.Dir(), name))
+		if err != nil {
+			return nil, err
+		}
+		for _, l := range located {
+			out = append(out, l.SQL)
+		}
+	}
+	return out, nil
+}
+
+// checkMigrationsSupported reports whether the migration set can be captured at
+// all, without touching a database.
+//
+// It is deliberately separate from applyAndCapture rather than being called by
+// it: the point is that this answer is available from the filesystem alone, so
+// it belongs before the expensive part of the run.
+func checkMigrationsSupported(opts *validateOptions) error {
+	if isSQLFile(opts.migrations) {
+		return nil
+	}
+	r, err := detectValidateRunner(opts)
+	if err != nil {
+		return toolerror.New(toolerror.RunnerNotFound, err.Error(),
+			"select a runner with --runner, or point --migrations at a raw-SQL file/directory")
+	}
+	if _, ok := r.(interface {
+		Files() []string
+		Dir() string
+	}); ok && r.Kind() == runner.RawSQL {
+		return nil
+	}
+	return toolerror.New(
+		toolerror.RunnerNotFound,
+		fmt.Sprintf("this looks like a %s project, and capturing %s migrations is not yet supported", r.Kind(), r.Kind()),
+		"point --migrations at a raw-SQL file or directory, or use --runner rawsql if the project also has plain .sql migrations",
+	)
+}
+
 // applyAndCapture applies the migration set to the target and captures the six
 // signal classes. A raw-SQL migration (a .sql file, or a directory the raw-SQL
 // runner recognizes) is executed statement-by-statement over a connection for
@@ -200,13 +398,34 @@ func applyAndCapture(ctx context.Context, t target.Target, opts *validateOptions
 	if err != nil {
 		return nil, toolerror.New(toolerror.RunnerNotFound, err.Error(), "select a runner with --runner, or point --migrations at a raw-SQL file/directory")
 	}
-	raw, ok := r.(interface{ Files() []string })
+	raw, ok := r.(interface {
+		Files() []string
+		Dir() string
+	})
 	if r.Kind() != runner.RawSQL || !ok {
-		return nil, toolerror.New(toolerror.RunnerNotFound, fmt.Sprintf("capturing %s migrations is not yet supported", r.Kind()), "point --migrations at a raw-SQL file or directory")
+		// Detection recognizes Alembic/Prisma/Drizzle projects, but capture only
+		// supports raw SQL — so those projects get here after a target has
+		// already been stood up. Say plainly that the project was recognized and
+		// which part is unsupported, rather than implying no runner was found.
+		return nil, toolerror.New(
+			toolerror.RunnerNotFound,
+			fmt.Sprintf("this looks like a %s project, and capturing %s migrations is not yet supported", r.Kind(), r.Kind()),
+			"point --migrations at a raw-SQL file or directory, or use --runner rawsql if the project also has plain .sql migrations",
+		)
 	}
+	// NOTE: deliberately NO runner.EnsureAvailable here. This path does not shell
+	// out — it reads the .sql files and applies them over the existing pgx
+	// connection (see applyStatements) — so requiring psql on PATH would break
+	// raw-SQL validation on machines that legitimately do not have it. The
+	// pre-flight belongs at the ApplyCmd call site, whenever one exists.
 	var stmts []validate.Located
+	// Resolve against the runner's own directory, not opts.migrations: detection
+	// descends into migrations/, db/migrations/, … so `--migrations .` with files
+	// in ./migrations/ has Files() relative to ./migrations, and joining them to
+	// "." yields ./001.sql — a path that does not exist. Detection succeeded, so
+	// the failure surfaced as an unreadable file rather than a missing runner.
 	for _, name := range raw.Files() {
-		s, err := readSQLFile(filepath.Join(opts.migrations, name))
+		s, err := readSQLFile(filepath.Join(raw.Dir(), name))
 		if err != nil {
 			return nil, toolerror.New(toolerror.BadUsage, err.Error(), "check the --migrations path")
 		}
@@ -337,9 +556,16 @@ func hostOf(dsn string) string {
 	return cfg.Host
 }
 
+// isSQLFile matches the extension case-insensitively, as every other .sql check
+// does (plan.go, mcp/tool_validate_migration.go, runner/rawsql.go). On the
+// case-insensitive filesystems that Windows and macOS default to, `001_init.SQL`
+// is an ordinary file: matching it exactly made `validate -m 001_init.SQL` skip
+// the raw-SQL path and fail with RunnerNotFound, while `plan` on the same file
+// worked and a DIRECTORY containing it validated fine — since rawsql.go's own
+// scan already folds case.
 func isSQLFile(path string) bool {
 	info, err := os.Stat(path)
-	return err == nil && !info.IsDir() && filepath.Ext(path) == ".sql"
+	return err == nil && !info.IsDir() && strings.EqualFold(filepath.Ext(path), ".sql")
 }
 
 // readSQLFile reads a .sql file and splits it into statements.

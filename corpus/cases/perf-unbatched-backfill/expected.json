@@ -1,0 +1,7 @@
+{
+  "description": "Unbatched backfill carrying a WHERE — RS-PERF-010 WARN. Sized from null_fraction (0.9 x 50M = ~45M rows), which is precisely the selectivity of an IS NULL predicate. Before this code existed the case returned PASS: RS-PERF-002 only fires when there is NO WHERE clause, so the form the hazard actually takes was exempt.",
+  "verdict": "WARN",
+  "findings": [
+    {"code": "RS-PERF", "severity": "warn"}
+  ]
+}

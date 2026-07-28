@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 )
 
@@ -58,7 +59,10 @@ func (r Result) Statement(migrations []MigrationFile) Statement {
 	for _, m := range migrations {
 		sum := sha256.Sum256(m.Contents)
 		subjects = append(subjects, Subject{
-			Name:   m.Path,
+			// Slash-separated, so the same migration names one subject on every
+			// OS. internal/findings/rslock.go already does this for verdict
+			// locations; without it a Windows run emits `migrations\001.sql`.
+			Name:   filepath.ToSlash(m.Path),
 			Digest: map[string]string{"sha256": hex.EncodeToString(sum[:])},
 		})
 	}
@@ -75,6 +79,27 @@ func (r Result) Statement(migrations []MigrationFile) Statement {
 func (r Result) MarshalStatement(migrations []MigrationFile) ([]byte, error) {
 	return json.MarshalIndent(r.Statement(migrations), "", "  ")
 }
+
+// A NOTE ON LINE ENDINGS, because the obvious "fix" here is wrong.
+//
+// This digest is deliberately over the RAW FILE BYTES. An earlier change folded
+// CRLF to LF first, reasoning that a consumer repo checked out on Windows with
+// core.autocrlf=true would otherwise digest the same commit differently from a
+// Linux CI runner. The observation is true; the fix was not.
+//
+// An in-toto subject digest is DEFINED as the digest of the artifact. Normalizing
+// it means `sha256sum migrations/001.sql` never matches the attested value, so
+// `cosign verify-attestation` and every other standard verifier fail against the
+// very file the subject names — trading a portability problem for an
+// interoperability one, and silently redefining a cross-ecosystem contract.
+//
+// The portability problem is real and belongs where it can be solved without
+// breaking verification: `.gitattributes` with `* text=auto eol=lf` in the
+// consumer repo, which is what this repo already does for its own tree.
+//
+// Subject.Name IS still slash-normalized below. That is a naming convention
+// rather than a digest input, so it costs nothing and keeps one migration naming
+// one subject on every OS.
 
 // splitDigest splits "sha256:<hex>" into ("sha256", "<hex>"). A digest with no
 // recognizable prefix is treated as a bare sha256 hex.

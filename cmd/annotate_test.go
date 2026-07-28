@@ -92,3 +92,43 @@ func TestAnnotateRejectsNonVerdict(t *testing.T) {
 		t.Errorf("expected a parse tool-error on stderr, got:\n%s", stderr)
 	}
 }
+
+// TestAnnotateRejectsToolErrorPayload: a tool-error payload unmarshals cleanly
+// into verdict.Result — its fields are simply absent — so annotate used to
+// render a check summary headed by an EMPTY verdict word. The job still failed
+// (the exit code is separate), but the PR showed a malformed rowshape summary
+// instead of the tool error, which is exactly the "could not run" vs "unsafe"
+// confusion internal/exitcode exists to prevent.
+func TestAnnotateRejectsToolErrorPayload(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "toolerr.json")
+	body := `{"rowshape":"1","error":"tool_error","category":"target_unavailable","message":"no Docker daemon","hint":"start Docker"}`
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	summary := filepath.Join(dir, "summary.md")
+
+	err := runAnnotate(p, summary)
+	if err == nil {
+		t.Fatal("annotate must refuse a tool-error payload, not render it as a verdict")
+	}
+
+	// The summary must not have been written with an empty verdict heading.
+	if b, readErr := os.ReadFile(summary); readErr == nil {
+		if strings.Contains(string(b), "## rowshape:") {
+			t.Errorf("a tool error must not produce a verdict summary, got:\n%s", b)
+		}
+	}
+}
+
+// A verdict-shaped document with no verdict field is not a verdict either.
+func TestAnnotateRejectsEmptyVerdict(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "empty.json")
+	if err := os.WriteFile(p, []byte(`{"rowshape":"1","findings":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runAnnotate(p, filepath.Join(dir, "summary.md")); err == nil {
+		t.Fatal("annotate must refuse a document with no verdict field")
+	}
+}

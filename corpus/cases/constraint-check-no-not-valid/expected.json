@@ -1,0 +1,7 @@
+{
+  "description": "ADD CONSTRAINT CHECK without NOT VALID on valid data — RS-CONSTRAINT-020 WARN. The migration SUCCEEDS; the cost is the ACCESS EXCLUSIVE scan over 200M rows, not the outcome. Before this code existed the case returned PASS with zero findings, because every analyzer asked 'will this fail?' rather than 'is this safe?'.",
+  "verdict": "WARN",
+  "findings": [
+    {"code": "RS-CONSTRAINT", "severity": "warn"}
+  ]
+}

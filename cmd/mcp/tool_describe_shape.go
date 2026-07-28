@@ -2,12 +2,14 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/rowshape/rowshape/internal/fixture"
+	"github.com/rowshape/rowshape/internal/toolerror"
 )
 
 // describe_shape hands an agent the production SHAPE before it writes SQL
@@ -52,6 +54,16 @@ type shapeIndex struct {
 	Privacy string       `json:"privacy,omitempty"`
 	Tables  []tableBrief `json:"tables"`
 	Note    string       `json:"note"`
+	// Truncated is present only when the list was cut, so an agent is never left
+	// to infer absence from silence.
+	Truncated *indexTruncation `json:"truncated,omitempty"`
+}
+
+// indexTruncation reports that the table list was shortened, and by how much.
+type indexTruncation struct {
+	Shown int    `json:"shown"`
+	Total int    `json:"total"`
+	Note  string `json:"note"`
 }
 
 // columnShape is a column's statistical shape — no value-derived fields.
@@ -97,7 +109,7 @@ type tableShape struct {
 func handleDescribeShape(_ context.Context, _ *sdk.CallToolRequest, in describeShapeInput) (*sdk.CallToolResult, any, error) {
 	f, err := loadFixture(in.Fixture)
 	if err != nil {
-		return errorResult(err.Error()), nil, nil
+		return errorText(toolerror.FixtureParse, err.Error(), "check the fixture path, or run `rowshape pull` to produce one"), nil, nil
 	}
 
 	if in.Table == "" {
@@ -107,11 +119,26 @@ func handleDescribeShape(_ context.Context, _ *sdk.CallToolRequest, in describeS
 
 	tbl, ok := f.Tables[in.Table]
 	if !ok {
-		return errorResult(fmt.Sprintf("no table %q in the fixture; call describe_shape with no table for the index", in.Table)), nil, nil
+		return errorText(toolerror.BadUsage, fmt.Sprintf("no table %q in the fixture", in.Table), "call describe_shape with no table to list the tables the fixture knows"), nil, nil
 	}
 	out := buildTableShape(in.Table, tbl)
 	return textResult(fmt.Sprintf("shape of %s (%d rows, %s): %d columns.", in.Table, tbl.Rows.Value, tbl.Rows.Confidence, len(out.Columns))), out, nil
 }
+
+// maxIndexTables bounds how many tables describe_shape lists in one answer.
+//
+// The schema budget disciplines the FIXED per-session cost (2400 chars for all
+// four tool schemas). Nothing bounded the VARIABLE per-call cost, which is much
+// larger in any real session: measured, the index is ~1KB at 10 tables, ~8.7KB
+// at 100, and ~43KB at 500 — about 10,800 tokens, more than four times the
+// entire session's schema budget, in a single call.
+//
+// 200 keeps a large-but-ordinary schema whole (~17KB) while stopping a
+// thousand-table monolith from consuming an agent's context before it has
+// written anything. The truncation is REPORTED rather than silent: an agent that
+// cannot see a table must know the list was cut, or it will conclude the table
+// does not exist.
+const maxIndexTables = 200
 
 // buildIndex returns the table index — never the full fixture body (PRD §8.2).
 func buildIndex(path string, f *fixture.Fixture) shapeIndex {
@@ -121,13 +148,30 @@ func buildIndex(path string, f *fixture.Fixture) shapeIndex {
 		Privacy: f.Meta.Privacy,
 		Note:    "index only — call describe_shape with a `table` for its columns and fan-out.",
 	}
-	for _, name := range sortedKeys(f.Tables) {
+	names := sortedKeys(f.Tables)
+	total := len(names)
+	truncated := false
+	if total > maxIndexTables {
+		names = names[:maxIndexTables]
+		truncated = true
+	}
+	for _, name := range names {
 		t := f.Tables[name]
 		idx.Tables = append(idx.Tables, tableBrief{
 			Table:   name,
 			Rows:    factI{Value: t.Rows.Value, Confidence: confOf(t.Rows.Confidence)},
 			Columns: len(t.Columns),
 		})
+	}
+	if truncated {
+		idx.Truncated = &indexTruncation{
+			Shown: len(names),
+			Total: total,
+			Note: fmt.Sprintf(
+				"listing the first %d of %d tables alphabetically. A table missing from this list is NOT "+
+					"absent from the fixture — call describe_shape with its exact name to get its shape.",
+				len(names), total),
+		}
 	}
 	return idx
 }
@@ -210,7 +254,35 @@ func textResult(text string) *sdk.CallToolResult {
 	return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: text}}}
 }
 
-// errorResult is a tool-level error result (not a transport error).
-func errorResult(text string) *sdk.CallToolResult {
-	return &sdk.CallToolResult{IsError: true, Content: []sdk.Content{&sdk.TextContent{Text: text}}}
+// errorResult is a tool-level error result (not a transport error), carrying the
+// SAME structured tool-error contract the CLI emits under --json.
+//
+// Every MCP failure used to return a bare string. internal/exitcode exists
+// specifically so that "the tool could not run" is never confused with "the
+// migration is unsafe" — and internal/toolerror carries the eight categories an
+// agent branches on to decide what to do next (retry the environment, fix the
+// fixture, install a runner; none of which is "the migration is unsafe"). An
+// agent on MCP could make none of those distinctions, on the one surface built
+// for agents.
+//
+// The payload goes in the text content as JSON so it survives any client, and
+// IsError stays set so clients that only check the flag still behave correctly.
+// The human-readable rendering is appended for clients that surface text to a
+// person.
+func errorResult(te *toolerror.ToolError) *sdk.CallToolResult {
+	payload, err := json.Marshal(te)
+	if err != nil {
+		// Marshaling a struct of strings cannot realistically fail; degrade to
+		// the message rather than losing the error entirely.
+		return &sdk.CallToolResult{IsError: true, Content: []sdk.Content{&sdk.TextContent{Text: te.Message}}}
+	}
+	return &sdk.CallToolResult{
+		IsError: true,
+		Content: []sdk.Content{&sdk.TextContent{Text: string(payload)}},
+	}
+}
+
+// errorText builds a categorized tool error from a message and hint.
+func errorText(cat toolerror.Category, msg, hint string) *sdk.CallToolResult {
+	return errorResult(toolerror.New(cat, msg, hint))
 }

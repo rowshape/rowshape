@@ -2,6 +2,7 @@ package hydrate
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,11 @@ type Options struct {
 	// MaxRows caps the synthesized rows per table (0 = no cap), a safety valve so
 	// a huge declared count can't try to generate billions of rows.
 	MaxRows int64
+	// MaxCells bounds the total materialized cells (rows x columns) across all
+	// tables. Zero uses DefaultMaxCells; negative means explicitly unbounded.
+	// This is the backstop MaxRows was not: MaxRows defaults to no cap, so
+	// nothing prevented a billion-row fixture from being materialized in memory.
+	MaxCells int64
 }
 
 // Result is the generated data for a whole fixture.
@@ -55,6 +61,9 @@ func Generate(f *fixture.Fixture, opts Options) (*Result, error) {
 	for _, name := range tableNames {
 		rowCounts[name] = hydratedRowCount(f.Tables[name].Rows.Value, scale, opts.MaxRows)
 	}
+	if err := checkBudget(f, tableNames, rowCounts, opts.MaxCells); err != nil {
+		return nil, err
+	}
 
 	for _, name := range tableNames {
 		tbl := f.Tables[name]
@@ -67,10 +76,92 @@ func Generate(f *fixture.Fixture, opts Options) (*Result, error) {
 	return res, nil
 }
 
+// DefaultMaxCells bounds how much hydrate will materialize, in cells (a cell is
+// one column of one row).
+//
+// Generate builds the ENTIRE result in memory — a [][]any per table, all tables
+// retained in Result — and target.Load then makes another full copy before COPY.
+// Meanwhile validate and hydrate both default --max-rows to 0, meaning NO CAP.
+// So `rowshape validate` against a fixture that legitimately declares
+// rows: 1000000000 attempted a billion-row in-memory materialization by default
+// and died with an OOM that named nothing useful.
+//
+// Each cell costs at least a 16-byte interface header plus its value, so 50M
+// cells is roughly 2-3 GB — generous enough that no realistic fixture trips it
+// by accident, and bounded enough to fail before the OOM killer does.
+const DefaultMaxCells = 50_000_000
+
+// checkBudget refuses a hydrate that would not fit in memory, rather than
+// truncating it.
+//
+// Refusing is deliberate. Silently capping the row count would change the
+// duration estimates and therefore the VERDICT, without telling anyone — the
+// same class of quiet wrongness as reporting `instant` from a 1ms basis. An
+// error that names the projected size and the two flags that fix it is both
+// honest and actionable; an OOM is neither.
+func checkBudget(f *fixture.Fixture, tableNames []string, rowCounts map[string]int64, maxCells int64) error {
+	if maxCells == 0 {
+		maxCells = DefaultMaxCells
+	}
+	if maxCells < 0 {
+		return nil // explicitly unbounded: the caller has accepted the risk
+	}
+
+	var total int64
+	var biggest string
+	var biggestCells int64
+	for _, name := range tableNames {
+		cols := int64(len(f.Tables[name].Columns))
+		if cols == 0 {
+			cols = 1
+		}
+		rows := rowCounts[name]
+		cells := rows * cols
+		// Detect the multiplication overflowing rather than testing for a
+		// negative result: 1<<62 * 8 wraps to exactly 0, which would have slipped
+		// past a sign check and let an absurd fixture through as "no cells".
+		if rows != 0 && cells/cols != rows {
+			return fmt.Errorf(
+				"hydrate: table %s declares %d rows, which overflows when multiplied by its column count; "+
+					"use --max-rows or --scale", name, rows)
+		}
+		total += cells
+		if total < 0 { // the running sum overflowed
+			return fmt.Errorf("hydrate: this fixture's total row count overflows; use --max-rows or --scale")
+		}
+		if cells > biggestCells {
+			biggest, biggestCells = name, cells
+		}
+	}
+	if total <= maxCells {
+		return nil
+	}
+	return fmt.Errorf(
+		"hydrate: this fixture would materialize about %s cells in memory (limit %s); "+
+			"the largest table is %s at %s cells. Use --max-rows to cap rows per table, or --scale to "+
+			"hydrate a fraction of the declared counts. Note that scaling down changes the measured basis "+
+			"for duration estimates, which rowshape reports as the basis alongside each estimate",
+		humanInt(total), humanInt(maxCells), biggest, humanInt(biggestCells))
+}
+
+// humanInt renders a large count readably for an error message.
+func humanInt(n int64) string {
+	switch {
+	case n >= 1_000_000_000:
+		return fmt.Sprintf("%.1fB", float64(n)/1e9)
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fK", float64(n)/1e3)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
 // hydratedRowCount converts a declared count and scale into a row count of at
 // least 1 (so every table gets exercised), capped by MaxRows.
 func hydratedRowCount(declared int64, scale float64, maxRows int64) int64 {
-	n := int64(float64(declared) * scale)
+	n := toI64(float64(declared) * scale)
 	if n < 1 {
 		n = 1
 	}
@@ -84,6 +175,25 @@ func hydratedRowCount(declared int64, scale float64, maxRows int64) int64 {
 func generateTable(f *fixture.Fixture, name string, tbl fixture.Table, seed int64, rowCounts map[string]int64) (GeneratedTable, error) {
 	n := rowCounts[name]
 	colNames := sortedKeys(tbl.Columns)
+
+	// Refuse a NOT NULL column of a type this build cannot generate, rather than
+	// emitting a string literal that Postgres will reject on INSERT.
+	//
+	// The previous fallback classified every unmodelled type as "text", so an
+	// `inet NOT NULL` column was hydrated as 'val_206071' and the load failed with
+	// a Postgres syntax error naming neither rowshape nor the column. Refusing
+	// here names both, and points at the two ways forward.
+	for _, col := range colNames {
+		c := tbl.Columns[col]
+		if categorize(c.Type) == "unmodelled" && !c.Nullable {
+			return GeneratedTable{}, fmt.Errorf(
+				"column %s.%s is %s NOT NULL, and rowshape cannot synthesize a value of that type. "+
+					"Hydrating it as text would emit a literal Postgres rejects on INSERT. "+
+					"Use --target to validate against a database that already has real data, or add a "+
+					"`format` hint to the column in the fixture if one of the known formats fits",
+				shortName(name), col, c.Type)
+		}
+	}
 
 	gt := GeneratedTable{
 		Name:         name,
@@ -113,7 +223,7 @@ func generateTable(f *fixture.Fixture, name string, tbl fixture.Table, seed int6
 			case isFK:
 				// fk[ord] is the assigned parent ordinal; map it to the id value
 				// the parent's identity column actually generated for that ordinal.
-				v = parentIDValue(f, fkRefs[col], fk[ord], rowCounts[parentTable(fkRefs[col].To)])
+				v = parentIDValue(f, seed, fkRefs[col], fk[ord], rowCounts[parentTable(fkRefs[col].To)])
 			default:
 				v = generateValue(seed, name, col, c, ord)
 			}
@@ -190,7 +300,7 @@ func sampleHistogram(h *fixture.Histogram, r *rng) (any, bool) {
 	// and 0.07% of the int64 values that actually reach the SQL — roughly one row
 	// in 1,380. Do not "simplify" this back.
 	v := lo + float64(r.float64()*span)
-	return int64(v), true
+	return toI64(v), true
 }
 
 // toFloat best-effort converts a histogram bound to a float64.
@@ -239,6 +349,21 @@ func fakeValue(c fixture.Column, n int64, r *rng) any {
 
 	// No format hint: fall back to the type category.
 	switch categorize(c.Type) {
+	case "inet":
+		// Documentation range (RFC 5737), so a hydrated value can never be
+		// mistaken for a real address.
+		return fmt.Sprintf("192.0.2.%d", n%256)
+	case "macaddr":
+		return fmt.Sprintf("00:00:5e:00:53:%02x", n%256)
+	case "interval":
+		return fmt.Sprintf("%d seconds", n%86400)
+	case "xml":
+		return fmt.Sprintf("<r id=\"%d\"/>", n)
+	case "unmodelled":
+		// A value cannot be invented for a type this build does not model. NULL
+		// is the one literal every nullable column accepts; for a NOT NULL column
+		// generateTable refuses rather than emitting something that will not load.
+		return nil
 	case "numeric":
 		return numericInRange(c, n)
 	case "temporal":
@@ -352,9 +477,37 @@ func fakeUUID(n int64) string {
 // the two in step whatever the range is — and if the fixture carries no facts for
 // the parent column, generation falls back to the ordinal, which is what the id
 // would be in that case anyway.
-func parentIDValue(f *fixture.Fixture, ref fixture.Reference, parentOrdinal, parentN int64) int64 {
+func parentIDValue(f *fixture.Fixture, seed int64, ref fixture.Reference, parentOrdinal, parentN int64) any {
 	col, ok := parentIDColumn(f, ref)
 	if !ok {
+		return parentOrdinal
+	}
+
+	// A NON-NUMERIC parent key must be generated the way the parent generated it,
+	// not as an integer.
+	//
+	// This function returned int64 unconditionally and derived the value through
+	// numericInRange, which reads only col.Range and ignores col.Format and the
+	// column's type. For a uuid primary key the PARENT column is produced by
+	// generateValue -> fakeUUID (a string) while the child's FK column got
+	// int64(0), int64(1), ... WriteSQL then emitted a bare 0 into a column that
+	// DDL created as `uuid`, so the INSERT failed outright — or, under a looser
+	// loader, produced an orphan for every child row. uuid primary keys with
+	// foreign keys are an extremely common schema shape.
+	//
+	// This is the same class of bug as the ordinal-vs-range one described above:
+	// that fix reasoned about the parent's RANGE but still assumed the parent's
+	// TYPE. Running the parent's own generator over the parent's ordinal is what
+	// keeps the two in step regardless of either.
+	if categorize(col.Type) != "numeric" {
+		// An ordinal at or beyond parentN is a deliberate orphan. No special
+		// handling is needed here: unlike numericInRange, which wraps within the
+		// column's span, these generators derive a unique column's value directly
+		// from the ordinal, so an ordinal no parent used yields a value no parent
+		// has.
+		if v := generateValue(seed, parentTable(ref.To), parentColumnName(ref.To), col, parentOrdinal); v != nil {
+			return v
+		}
 		return parentOrdinal
 	}
 	// An ordinal at or beyond parentN is a deliberate orphan (assignForeignKeys
@@ -375,22 +528,38 @@ func parentIDValue(f *fixture.Fixture, ref fixture.Reference, parentOrdinal, par
 
 // maxParentID is the largest id the parent table generated across ordinals
 // [0, parentN).
+//
+// Closed form, not a scan. The previous implementation looped over every ordinal
+// and relied on two escapes, BOTH of which failed for a numeric key with no
+// range: the `!ok` branch was dead (numericInRange returns the ordinal itself
+// when bounds are absent, so the int64 assertion always succeeds — and that
+// branch would have returned parentN where the true answer is parentN-1), and
+// the `break` required numericBounds to succeed, which is exactly what does not
+// happen in that case. So a rangeless parent key cost a full parentN scan, per
+// orphan cell. With a 1M-row parent and a 1% orphan fraction on a 1M-row child
+// that is ~10^10 iterations.
+//
+// The values are lo + (ord % span), so the maximum over [0, parentN) is simply
+// lo + min(parentN, span) - 1. This is behavior-preserving: hydrate_max_test.go
+// checks it against the original scan across a grid of ranges and row counts.
 func maxParentID(col fixture.Column, parentN int64) int64 {
-	var max int64
-	for ord := int64(0); ord < parentN; ord++ {
-		v, ok := numericInRange(col, ord).(int64)
-		if !ok {
-			return parentN // no numeric range: ids are the ordinals themselves
-		}
-		if ord == 0 || v > max {
-			max = v
-		}
-		// The values cycle with period span, so one lap is enough.
-		if lo, hi, ok := numericBounds(col); ok && ord >= hi-lo {
-			break
-		}
+	if parentN <= 0 {
+		return 0
 	}
-	return max
+	lo, hi, ok := numericBounds(col)
+	if !ok {
+		// No range: numericInRange hands back the ordinal, so the largest id
+		// generated across [0, parentN) is parentN-1.
+		return parentN - 1
+	}
+	span := hi - lo + 1
+	if span <= 0 {
+		return lo
+	}
+	if parentN < span {
+		return lo + parentN - 1
+	}
+	return hi
 }
 
 // parentIDColumn resolves ref.To ("public.users.id") to the referenced column's
@@ -409,6 +578,15 @@ func parentIDColumn(f *fixture.Fixture, ref fixture.Reference) (fixture.Column, 
 	}
 	col, ok := tbl.Columns[ref.To[i+1:]]
 	return col, ok
+}
+
+// parentColumnName extracts the column from a reference target schema.table.column.
+func parentColumnName(to string) string {
+	i := strings.LastIndex(to, ".")
+	if i < 0 {
+		return to
+	}
+	return to[i+1:]
 }
 
 // parentTable extracts schema.table from a reference target schema.table.column.
@@ -432,6 +610,10 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 // toInt64 best-effort converts a range bound to int64.
+//
+// The float64 case goes through toI64: a range bound is read straight out of the
+// fixture, so a document carrying a value beyond int64 range would otherwise
+// convert differently on amd64 and arm64 and break INV-DETERMINISM.
 func toInt64(v any) (int64, bool) {
 	switch x := v.(type) {
 	case int:
@@ -439,7 +621,13 @@ func toInt64(v any) (int64, bool) {
 	case int64:
 		return x, true
 	case float64:
-		return int64(x), true
+		if math.IsNaN(x) {
+			// A NaN bound is not a bound. Reporting "no bound" is honest and
+			// keeps it out of span arithmetic, where it would poison everything
+			// downstream.
+			return 0, false
+		}
+		return toI64(x), true
 	default:
 		return 0, false
 	}
@@ -480,7 +668,30 @@ func categorize(typ string) string {
 		t == "double precision" || strings.HasPrefix(t, "numeric") ||
 		strings.HasPrefix(t, "decimal") || t == "money" || strings.HasSuffix(t, "serial"):
 		return "numeric"
+	case t == "inet" || t == "cidr":
+		return "inet"
+	case t == "macaddr" || t == "macaddr8":
+		return "macaddr"
+	case t == "interval":
+		return "interval"
+	case t == "xml":
+		return "xml"
 	default:
-		return "text"
+		// NOT "text". Falling back to text meant every unmodelled type — inet,
+		// cidr, macaddr, interval, point, xml, tsvector, enums, ranges, arrays,
+		// domains, composite types — was hydrated as a string literal like
+		// 'val_206071', which Postgres refuses on INSERT. The load then failed,
+		// and validate reported a tool error or a manufactured FAIL for a
+		// migration that was fine. Same class as the uuid foreign-key bug
+		// (CR3-T6): a plausible-looking value of the wrong type.
+		return "unmodelled"
 	}
+}
+
+// shortName trims the schema qualifier for a message, keeping it readable.
+func shortName(qualified string) string {
+	if i := strings.LastIndex(qualified, "."); i >= 0 {
+		return qualified[i+1:]
+	}
+	return qualified
 }

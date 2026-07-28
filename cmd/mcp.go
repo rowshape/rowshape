@@ -20,6 +20,8 @@ func newMCPCmd() *cobra.Command {
 			"plan_against) to an agent. Point your MCP client at `rowshape mcp`.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Report the real build version in the handshake, not a constant.
+			rsmcp.Version = version
 			if err := rsmcp.Serve(cmd.Context()); err != nil {
 				fmt.Fprintf(os.Stderr, "rowshape mcp: %v\n", err)
 				return toolError()

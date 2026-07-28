@@ -1,0 +1,7 @@
+{
+  "description": "RENAME COLUMN on a live table — RS-DEPLOY-001 WARN. Before this code existed the case returned PASS with zero findings. The finding deliberately cites no fixture fact: it is equally true of a rename on an empty table and on a billion-row one, so citing one would be false provenance in a signed document.",
+  "verdict": "WARN",
+  "findings": [
+    {"code": "RS-DEPLOY", "severity": "warn"}
+  ]
+}

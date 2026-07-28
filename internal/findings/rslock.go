@@ -100,14 +100,34 @@ func classifyRewrite(rawSQL string, major int, hasVersion bool) (op estimate.OpC
 
 	switch {
 	case strings.Contains(upper, "ADD COLUMN") || addsColumn(upper):
+		// A STORED generated column is computed for every existing row at ADD
+		// time, so it rewrites the table exactly as a volatile default does — and
+		// it carries no DEFAULT clause, so the defaultExpr check below never saw
+		// it and the statement produced no finding at all.
+		if strings.Contains(upper, "GENERATED ALWAYS AS") && strings.Contains(upper, "STORED") {
+			return estimate.TableRewrite, table, "ADD COLUMN GENERATED ALWAYS AS ... STORED", true
+		}
 		def, hasDefault := defaultExpr(sql)
 		if !hasDefault {
 			return 0, "", "", false // ADD COLUMN without a default does not rewrite
 		}
-		if isVolatile(def) {
+		switch volatilityOf(def) {
+		case volatileYes:
 			return estimate.TableRewrite, table, "ADD COLUMN with a volatile default", true
+		case volatileUnknown:
+			// An expression rowshape does not recognize. Reporting it as
+			// non-volatile - which is what a two-state check did - means NO
+			// FINDING AT ALL on PG 11+, so a user-defined volatile function, or
+			// any of the many volatile builtins not on the list, silently
+			// certified a full table rewrite as safe. Fail-open on the single
+			// hazard this tool is best known for.
+			//
+			// The honest answer for an unrecognized expression is "I cannot
+			// tell", which the confidence model already knows how to express.
+			// The caller emits the finding without an estimate.
+			return estimate.TableRewrite, table, "ADD COLUMN with a default whose volatility rowshape cannot determine", true
 		}
-		// Non-volatile default: catalog fast-path on PG 11+, rewrite before that.
+		// Known non-volatile: catalog fast-path on PG 11+, rewrite before that.
 		// Without an engine version, assume the worst (a rewrite) rather than a
 		// recent default (RFC §9.1).
 		m := major
@@ -146,24 +166,98 @@ func defaultExpr(sql string) (string, bool) {
 	return strings.TrimSpace(rest), true
 }
 
-// volatileFns are the common volatile expressions whose column default forces a
-// full table rewrite on every Postgres version (they cannot live in the catalog
-// as a single constant). now()/current_timestamp are STABLE, not volatile, and
-// so are deliberately absent.
+// volatility is the three-state answer to "does this DEFAULT force a rewrite?".
+//
+// A two-state answer was the bug: anything unrecognized fell to "not volatile",
+// which on PG 11+ means the catalog fast-path and therefore NO FINDING. A
+// user-defined volatile function, uuid_generate_v7(), gen_random_bytes(),
+// statement_timestamp() - all silently certified a full table rewrite as safe,
+// on the single hazard this tool is best known for.
+type volatility int
+
+const (
+	volatileNo volatility = iota
+	volatileYes
+	volatileUnknown
+)
+
+// volatileFns are volatile expressions whose column default forces a full table
+// rewrite on every Postgres version (they cannot live in the catalog as a single
+// constant). The list is NOT exhaustive - it cannot be, since a user can define
+// their own - which is exactly why volatilityOf falls to volatileUnknown rather
+// than to volatileNo.
 var volatileFns = []string{
 	"gen_random_uuid", "uuid_generate_v1", "uuid_generate_v4",
 	"random(", "clock_timestamp", "timeofday", "nextval",
 }
 
-// isVolatile reports whether a DEFAULT expression is volatile.
-func isVolatile(expr string) bool {
-	lower := strings.ToLower(expr)
+// stableFns are expressions known NOT to be volatile, so a default using one can
+// take the PG 11+ catalog fast-path. now() and current_timestamp are STABLE, not
+// volatile: they are fixed for the duration of the statement, so the default is a
+// single constant and no rewrite is needed.
+var stableFns = []string{
+	"now(", "current_timestamp", "current_date", "current_time",
+	"localtimestamp", "localtime", "current_user", "session_user", "current_schema",
+}
+
+// volatilityOf classifies a DEFAULT expression.
+func volatilityOf(expr string) volatility {
+	lower := strings.ToLower(strings.TrimSpace(expr))
+	if lower == "" {
+		return volatileNo
+	}
 	for _, fn := range volatileFns {
 		if strings.Contains(lower, fn) {
-			return true
+			return volatileYes
 		}
 	}
-	return false
+	for _, fn := range stableFns {
+		if strings.Contains(lower, fn) {
+			return volatileNo
+		}
+	}
+	// A LITERAL is definitely not volatile: a number, a quoted string, a boolean,
+	// NULL, or any of those with a cast. This is the common, safe case and it must
+	// stay silent or the rule becomes noise on every ADD COLUMN ... DEFAULT 0.
+	if isLiteralDefault(lower) {
+		return volatileNo
+	}
+	// Anything else - a function call rowshape does not recognize, or a bare
+	// identifier - cannot be decided from the text.
+	return volatileUnknown
+}
+
+// isLiteralDefault reports whether an expression is a plain literal, optionally
+// cast. It deliberately accepts only shapes that CANNOT be a function call.
+func isLiteralDefault(lower string) bool {
+	e := lower
+	// Strip a trailing cast: '0'::bigint, 'x'::text.
+	if i := strings.Index(e, "::"); i >= 0 {
+		e = strings.TrimSpace(e[:i])
+	}
+	e = strings.TrimSpace(strings.Trim(e, "()"))
+	switch e {
+	case "null", "true", "false":
+		return true
+	}
+	// A quoted string literal with no embedded call.
+	if len(e) >= 2 && e[0] == 0x27 && e[len(e)-1] == 0x27 {
+		return true
+	}
+	// A number.
+	hasDigit := false
+	for i := 0; i < len(e); i++ {
+		c := e[i]
+		switch {
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		case c == '.' || c == '-' || c == '+' || c == 'e':
+			// part of a numeric literal
+		default:
+			return false
+		}
+	}
+	return hasDigit
 }
 
 // alterTableTarget extracts the (possibly schema-qualified) table name from an

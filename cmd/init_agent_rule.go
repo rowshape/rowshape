@@ -106,7 +106,9 @@ func writeRule(dir string, t ruleTarget) (writeStatus, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return 0, fmt.Errorf("creating %s: %w", filepath.Dir(t.Path), err)
 	}
-	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+	// Atomic: AGENTS.md / CLAUDE.md are the user's files and may hold a great
+	// deal that rowshape did not write.
+	if err := writeFileAtomic(path, []byte(out), 0o644); err != nil {
 		return 0, fmt.Errorf("writing %s: %w", t.Path, err)
 	}
 	if existed {

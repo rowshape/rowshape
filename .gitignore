@@ -13,3 +13,15 @@ coverage.*
 
 # Session scratch helpers (see CR-loop): never part of the repo.
 .cr_*.py
+
+# Node / docs-site
+#
+# node_modules was committed (11,430 files), and the only platform-specific
+# optional deps present were win32 — @esbuild/win32-x64, @img/sharp-win32-x64,
+# @rolldown/binding-win32-x64-msvc, @astrojs/compiler-binding-win32-x64-msvc.
+# CI survived because docs-deploy.yml runs `npm ci`, which wipes and reinstalls,
+# but a macOS or Linux contributor cloning and running `npm run build` without
+# `npm ci` first hit a hard native-module load failure. package-lock.json is what
+# pins the tree; the tree itself does not belong in git.
+node_modules/
+docs-site/dist/

@@ -92,7 +92,7 @@ func targetCounts(parentN, childN, declaredChild int64, fo *fixture.Fanout) []in
 	// definition of the population pull measured, so this inverts it — and it is
 	// what leaves the rest childless, which a fixture with mean > childN/parentN
 	// implies and the old model never represented.
-	nonEmpty := int64(math.Round(float64(childN) / mean))
+	nonEmpty := toI64(math.Round(float64(childN) / mean))
 	nonEmpty = clamp(nonEmpty, 1, parentN)
 
 	// `max` is a count of children, so it scales with the number of children being
@@ -102,13 +102,13 @@ func targetCounts(parentN, childN, declaredChild int64, fo *fixture.Fanout) []in
 	if declaredChild > 0 {
 		scale = float64(childN) / float64(declaredChild)
 	}
-	whale := clamp(int64(math.Round(mx*scale)), 1, childN)
+	whale := clamp(toI64(math.Round(mx*scale)), 1, childN)
 
 	// Ascending shape over the non-empty parents:
 	//   bottom 95%     — the curve from a plausible floor through p50 to p95
 	//   95% .. top-1   — near p95 (the facts claim nothing more)
 	//   top            — the whale
-	bodyEnd := int64(math.Floor(0.95 * float64(nonEmpty)))
+	bodyEnd := toI64(math.Floor(0.95 * float64(nonEmpty)))
 	bodyEnd = clamp(bodyEnd, 0, maxInt64(nonEmpty-1, 0))
 
 	for i := int64(0); i < nonEmpty; i++ {
@@ -117,9 +117,9 @@ func targetCounts(parentN, childN, declaredChild int64, fo *fixture.Fanout) []in
 			counts[i] = whale
 		case i < bodyEnd:
 			q := (float64(i) + 0.5) / float64(bodyEnd) // position within the body
-			counts[i] = maxInt64(1, int64(math.Round(bodyQuantile(q, p50, p95))))
+			counts[i] = maxInt64(1, toI64(math.Round(bodyQuantile(q, p50, p95))))
 		default:
-			counts[i] = maxInt64(1, int64(math.Round(p95)))
+			counts[i] = maxInt64(1, toI64(math.Round(p95)))
 		}
 	}
 
@@ -287,7 +287,7 @@ func orphanGroupCount(counts []int64, childN int64, of *fixture.Fact[float64]) i
 	if of == nil || of.Value <= 0 || childN <= 0 {
 		return 0
 	}
-	want := int64(math.Round(of.Value * float64(childN)))
+	want := toI64(math.Round(of.Value * float64(childN)))
 	if want <= 0 {
 		return 0
 	}

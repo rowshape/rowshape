@@ -33,11 +33,22 @@ By rule version:
   weakened      sessions=2  adherence=17%   loop-closure=0%
 ```
 
-The committed traces demonstrate the A/B: the `v2`-rule sessions read the shape,
-validate before the PR, and rewrite a WARN/FAIL until PASS; the `weakened`-rule
-sessions skip `describe_shape` and open a PR on a WARN. The weakened rule scores
-strictly lower on both metrics — asserted in `harness_test.go`
-(`TestWeakenedRuleScoresLower`).
+The committed traces illustrate the two ends of the scale: the `v2`-rule sessions
+read the shape, validate before the PR, and rewrite a WARN/FAIL until PASS; the
+`weakened`-rule sessions skip `describe_shape` and open a PR on a WARN.
+
+> **What this does and does not measure.** `TestWeakenedRuleScoresLower` asserts
+> that the adherent traces score higher than the non-adherent ones. Those traces
+> are **hand-authored fixtures**, and this package never loads
+> `internal/agentrule` — the `rule_version` field is parsed and then read by
+> nothing. So the test is a unit test of `Score()`, not an A/B of the rule: it
+> would pass unchanged if `rule.md` were emptied, deleted, or replaced with its
+> own negation.
+>
+> That is worth stating plainly because the scorer being correct is genuinely
+> useful, and because the gap is not in the code but in the input — the live
+> runner described below does not exist in this repo yet. Until it does, nothing
+> here supports a claim about the rule's *effect*.
 
 ## Where the traces come from
 

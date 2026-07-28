@@ -1,0 +1,7 @@
+{
+  "description": "TRUNCATE on a 200M-row table with no cascading child — RS-REVERSE-004 WARN. Before this code existed the case returned PASS with zero findings: rsperf's deleteTarget only looks for long-tailed CASCADING children, and rsReverse handled DROP TABLE but not TRUNCATE. Sized from declared rows, because running TRUNCATE against hydrated data reveals nothing about how much production data it would destroy.",
+  "verdict": "WARN",
+  "findings": [
+    {"code": "RS-REVERSE", "severity": "warn"}
+  ]
+}

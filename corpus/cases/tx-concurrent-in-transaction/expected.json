@@ -1,0 +1,7 @@
+{
+  "description": "CREATE INDEX CONCURRENTLY inside an explicit BEGIN/COMMIT — RS-TX-001 ERROR, verdict FAIL. Postgres refuses this with SQLSTATE 25001 every time. Before this code existed the case returned PASS: the sandbox does not execute the migration's own transaction control, so a clean apply proved nothing. RS-INDEX-001 does not fire because the index IS concurrent.",
+  "verdict": "FAIL",
+  "findings": [
+    {"code": "RS-TX", "severity": "error"}
+  ]
+}
