@@ -142,6 +142,74 @@ func TestItemsClassify(t *testing.T) {
 	}
 }
 
+// Migrations write unqualified names (`ALTER TABLE users ...`) but the live
+// schema — and the fixture it is read into — keys tables by their qualified name
+// (`public.users`, RFC §5). classify must resolve the name through
+// ResolveTable before the lookup, exactly as the analyzers do; a raw
+// current.Tables[table] miss reported a real table as `missing-target` for every
+// unqualified statement — the common case. Every existing classify case used a
+// qualified name in BOTH the statement and the fixture key, so the miss was never
+// exercised. These cases pin the resolved path across all four operation branches.
+func TestUnqualifiedStatementResolvesToQualifiedSchema(t *testing.T) {
+	current := schema(map[string][]string{
+		"public.users":  {"id", "email"},
+		"public.orders": {"id"},
+	})
+
+	cases := []struct {
+		name       string
+		stmt       string
+		wantStatus string
+		wantNote   string
+	}{
+		{
+			name:       "unqualified ADD COLUMN resolves to the qualified table",
+			stmt:       "ALTER TABLE users ADD COLUMN age int",
+			wantStatus: "ok",
+			wantNote:   "column will be added",
+		},
+		{
+			name:       "unqualified CREATE INDEX resolves and is not missing-target",
+			stmt:       "CREATE INDEX idx_orders_id ON orders (id)",
+			wantStatus: "ok",
+			wantNote:   "target present",
+		},
+		{
+			name:       "unqualified ADD CONSTRAINT resolves",
+			stmt:       "ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email)",
+			wantStatus: "ok",
+			wantNote:   "target present",
+		},
+		{
+			name:       "unqualified DROP TABLE resolves to a present table",
+			stmt:       "DROP TABLE users",
+			wantStatus: "ok",
+			wantNote:   "table will be dropped",
+		},
+		{
+			name:       "an unqualified name with no match is still missing-target",
+			stmt:       "CREATE INDEX i ON payments (id)",
+			wantStatus: "missing-target",
+			wantNote:   "target table not present on the live schema",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			items := Items(current, []string{tc.stmt})
+			if len(items) != 1 {
+				t.Fatalf("Items returned %d items, want 1: %+v", len(items), items)
+			}
+			if items[0].Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", items[0].Status, tc.wantStatus)
+			}
+			if items[0].Note != tc.wantNote {
+				t.Errorf("Note = %q, want %q", items[0].Note, tc.wantNote)
+			}
+		})
+	}
+}
+
 func TestItemsSkipsTxControlAndBlanks(t *testing.T) {
 	current := schema(map[string][]string{"public.users": {"id"}})
 	stmts := []string{

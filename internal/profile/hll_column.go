@@ -32,20 +32,46 @@ func (r *reader) hllDistinct(ctx context.Context, schema, table, column string) 
 	defer rows.Close()
 
 	sketch := hll.New()
+	// The number of values the sketch was actually shown. It is an EXACT upper bound
+	// on the distinct count — n values cannot contain more than n distinct ones — and
+	// it costs an increment, so there is no reason to publish an estimate that
+	// violates it.
+	var seen int64
 	for rows.Next() {
 		var v string
 		if err := rows.Scan(&v); err != nil {
 			return nil, err
 		}
 		sketch.AddString(v)
+		seen++
 		// v goes out of scope each iteration — no value is retained.
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
+	// HyperLogLog errs in BOTH directions (~1.6% at precision 14), so on a
+	// high-cardinality column its estimate routinely lands above the number of values
+	// there are: a 40,000-row table came back as 41,305 distinct. That is not merely
+	// imprecise, it is impossible, and a consumer computing selectivity as
+	// distinct/rows gets a ratio above 1 — which can flip an index-usefulness or
+	// fan-out judgement.
+	//
+	// Clamping to the observed count, not to the table's row count: the sketch only
+	// saw non-NULL values, so this is the tighter bound and it is right even for a
+	// mostly-null column.
+	value := int64(sketch.Count())
+	if value > seen {
+		value = seen
+	}
+
+	// `error` is NOT cleared and the confidence stays `measured`. The clamp removes an
+	// impossible reading; it does not turn an estimate into an exact count, and saying
+	// otherwise would license a PASS this fact cannot support (§7.4). Nor does
+	// value == seen imply uniqueness — INV-UNIQUENESS forbids inferring `unique` from
+	// anything but an exact probe, and nothing here writes it.
 	return &fixture.Fact[int64]{
-		Value:      int64(sketch.Count()),
+		Value:      value,
 		Confidence: fixture.Measured,
 		Via:        "hll",
 		Error:      round6(hll.RelativeError()),

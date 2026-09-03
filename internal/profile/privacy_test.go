@@ -223,3 +223,49 @@ func TestHashSource(t *testing.T) {
 		t.Errorf("empty host should yield empty source")
 	}
 }
+
+// TestStrictRedactsTypeVocabulary: under privacy:strict an enum's labels and a
+// domain's CHECK are withheld — they are the same class of information as a table's
+// verbatim CHECK expression, which strict already turns opaque (RFC §6.4, §8.2).
+//
+// label_count must SURVIVE. Cardinality is shape, and dropping it would make an
+// enum column unhydratable rather than merely anonymous: the emitter rebuilds a type
+// of the right size from the count, and with no count there is no type to build.
+func TestStrictRedactsTypeVocabulary(t *testing.T) {
+	newFixture := func() *fixture.Fixture {
+		return &fixture.Fixture{
+			Types: map[string]fixture.UserType{
+				"z.mood": {Kind: "enum", Labels: []string{"sad", "ok", "happy"}, LabelCount: 3},
+				"z.pos":  {Kind: "domain", Base: "integer", Check: "(VALUE > 0)", NotNull: true},
+			},
+			Tables: map[string]fixture.Table{},
+		}
+	}
+
+	strict := newFixture()
+	ApplyPrivacy(strict, PrivacyStrict, 0)
+	mood := strict.Types["z.mood"]
+	if len(mood.Labels) != 0 {
+		t.Errorf("strict kept the enum vocabulary: %v", mood.Labels)
+	}
+	if mood.LabelCount != 3 {
+		t.Errorf("label_count = %d, want 3 — cardinality is shape and must survive", mood.LabelCount)
+	}
+	pos := strict.Types["z.pos"]
+	if pos.Check != "opaque" {
+		t.Errorf("domain check = %q, want opaque", pos.Check)
+	}
+	if pos.Base != "integer" || !pos.NotNull {
+		t.Errorf("strict altered the domain's structure: %+v", pos)
+	}
+
+	// standard keeps both: they are DDL, emitted at standard exactly like a CHECK.
+	std := newFixture()
+	ApplyPrivacy(std, PrivacyStandard, 0)
+	if got := len(std.Types["z.mood"].Labels); got != 3 {
+		t.Errorf("standard dropped enum labels (%d of 3 kept)", got)
+	}
+	if std.Types["z.pos"].Check != "(VALUE > 0)" {
+		t.Errorf("standard made the domain check opaque: %q", std.Types["z.pos"].Check)
+	}
+}

@@ -1,7 +1,8 @@
 package fixture
 
 import (
-	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -115,78 +116,58 @@ func TestEmitTwoSpaceIndent(t *testing.T) {
 	}
 }
 
-// TestEmitSizeUnder100KB: a 200-table schema fits under 100KB (RFC §3.3).
-func TestEmitSizeUnder100KB(t *testing.T) {
-	f := &Fixture{
-		RowshapeFixture: FormatVersion,
-		Meta: Meta{
-			ID:      "big@2026-07-14",
-			Engine:  Engine{Name: "postgres", Version: "16.3"},
-			Privacy: "standard",
-			Profile: Profile{Mode: "fast"},
-		},
-		Tables: map[string]Table{},
+// TestEmitSizeAgainstBudget measures the emitter's real per-table cost against
+// the RFC §3.3 budget, using a fixture a REAL `rowshape pull` produced.
+//
+// It replaces a hand-built one, and the replacement is the whole point. The old
+// test constructed a 200-table fixture by hand with facts deliberately "at
+// estimated (bare)", came in at 101,424 bytes against a 102,400 limit — 976 bytes
+// of headroom, under 1% — and passed. A real pull of a 200-table schema is
+// 246,129 bytes. The guard was defending a number no user would ever see, on an
+// input materially lighter than what the emitter actually writes, which is the
+// same trap phase-dd named: a hand-authored fixture is self-consistent in ways a
+// real one is not.
+//
+// testdata/real-pull.yaml is the output of `rowshape pull` against a 20-table
+// schema shaped like the RFC's own description — a heavy tail of small lookup
+// tables plus a few wide ones. Twenty rather than two hundred so the testdata
+// stays small; the assertion is on the PER-TABLE cost, which is what actually
+// drifts when the emitted vocabulary grows.
+func TestEmitSizeAgainstBudget(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "real-pull.yaml"))
+	if err != nil {
+		t.Fatalf("read real fixture: %v", err)
 	}
-	// A realistic 200-table schema has a heavy tail of small join/lookup tables
-	// and fewer wide tables. Column counts cycle through this distribution
-	// (average ~6). Facts land at estimated (bare) as fast-mode profiling emits.
-	colCounts := []int{2, 2, 2, 3, 3, 3, 4, 4, 5, 2}
-	uniqInt := func() *Fact[int64] { return &Fact[int64]{Value: 100000, Confidence: Estimated} }
-	nf := func() *Fact[float64] { return &Fact[float64]{Value: 0.01, Confidence: Estimated} }
-	mn, mx := int64(3), int64(64)
-	mean := 24.0
-	pool := func(idx int) (string, Column) {
-		switch idx {
-		case 0:
-			return "id", Column{Type: "bigint", Nullable: false, Distinct: uniqInt(), Unique: &Fact[bool]{Value: true, Confidence: Exact, Via: "constraint"}, Generated: "identity"}
-		case 1:
-			return "owner_id", Column{Type: "bigint", Nullable: false, Distinct: &Fact[int64]{Value: 5000, Confidence: Estimated}}
-		case 2:
-			return "created_at", Column{Type: "timestamp with time zone", Nullable: false, Distinct: uniqInt()}
-		case 3:
-			return "status", Column{Type: "text", Nullable: false, Distinct: &Fact[int64]{Value: 4, Confidence: Estimated}, Format: "enum_like", Length: &Length{Min: &mn, Max: &mx, Mean: &mean}}
-		case 4:
-			return "name", Column{Type: "text", Nullable: true, NullFraction: nf(), Distinct: uniqInt(), Format: "free_text", Length: &Length{Min: &mn, Max: &mx, Mean: &mean}}
-		case 5:
-			return "amount", Column{Type: "numeric(10,2)", Nullable: true, NullFraction: nf(), Distinct: uniqInt(), Range: &Range{Min: 0, Max: 9999, Mean: &mean}}
-		default:
-			// Most columns in a wide table are simple scalars (fks, ints, flags),
-			// not richly-profiled text.
-			return fmt.Sprintf("attr_%02d", idx), Column{Type: "integer", Nullable: false, Distinct: uniqInt()}
-		}
-	}
-	for i := 0; i < 200; i++ {
-		n := colCounts[i%len(colCounts)]
-		cols := map[string]Column{}
-		for c := 0; c < n; c++ {
-			name, col := pool(c)
-			cols[name] = col
-		}
-		tname := fmt.Sprintf("public.table_%03d", i)
-		tbl := Table{
-			Rows:    Fact[int64]{Value: 100000, Confidence: Estimated},
-			Bytes:   8000000,
-			Columns: cols,
-			Constraints: []Constraint{
-				{Name: fmt.Sprintf("table_%03d_pkey", i), Kind: "primary_key", Columns: []string{"id"}},
-			},
-		}
-		// About half the tables carry an FK + supporting index.
-		if i%3 == 0 && n > 1 {
-			tbl.Indexes = []Index{{Name: fmt.Sprintf("table_%03d_owner_idx", i), Method: "btree", Columns: []string{"owner_id"}, Bytes: 400000}}
-			tbl.References = []Reference{{Column: "owner_id", To: "public.users.id", OnDelete: "cascade"}}
-		}
-		f.Tables[tname] = tbl
+	f, err := Parse(data)
+	if err != nil {
+		t.Fatalf("parse real fixture: %v", err)
 	}
 	out, err := Emit(f)
 	if err != nil {
 		t.Fatalf("Emit: %v", err)
 	}
-	const limit = 100 * 1024
-	if len(out) >= limit {
-		t.Errorf("200-table fixture is %d bytes, want < %d (RFC §3.3)", len(out), limit)
+
+	perTable := len(out) / len(f.Tables)
+	projected := perTable * BudgetTables
+
+	t.Logf("real pull: %d bytes over %d tables = %d bytes/table; %d-table projection %d bytes",
+		len(out), len(f.Tables), perTable, BudgetTables, projected)
+
+	// The budget is the DOCUMENTED one (§3.3). It is set to what the emitter
+	// actually costs, not to an aspiration, so a legitimate addition to the
+	// vocabulary has room and an accidental blow-up does not.
+	if projected > BudgetBytes {
+		t.Errorf("a real %d-table fixture projects to %d bytes, over the §3.3 budget of %d; "+
+			"either slim what is emitted or move the documented budget deliberately",
+			BudgetTables, projected, BudgetBytes)
 	}
-	t.Logf("200-table fixture size: %d bytes", len(out))
+	// And a floor, so the budget cannot be quietly satisfied by the emitter losing
+	// facts: a sudden drop means fields stopped being written, not that anything
+	// got more efficient.
+	if projected < BudgetBytes/4 {
+		t.Errorf("a real %d-table fixture projects to only %d bytes, far under the %d budget — "+
+			"check the emitter has not stopped writing facts", BudgetTables, projected, BudgetBytes)
+	}
 }
 
 // TestParseVerifiedRefusesTamperedFixture: meta.digest is the fixture's identity

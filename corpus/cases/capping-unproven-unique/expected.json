@@ -1,7 +1,19 @@
 {
-  "description": "ADD CONSTRAINT UNIQUE against unproven uniqueness cannot PASS (§7.2/§7.4) — it WARNs and names the resolving command.",
+  "description": "ADD CONSTRAINT UNIQUE against unproven uniqueness: cannot PASS on the data (RS-DATA-014 WARN naming the resolving command, §7.2/§7.4), AND the build holds ACCESS EXCLUSIVE (RS-INDEX-002 WARN).",
   "verdict": "WARN",
   "findings": [
-    {"code": "RS-DATA", "severity": "warn", "resolve_contains": "pull --exact"}
+    {
+      "code": "RS-DATA",
+      "severity": "warn",
+      "resolve_contains": "pull --exact"
+    },
+    {
+      "code": "RS-INDEX",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
   ]
 }

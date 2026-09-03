@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/rowshape/rowshape/internal/dsn"
@@ -166,10 +167,19 @@ func (e *Ephemeral) Connect(ctx context.Context) (*pgx.Conn, error) {
 func (e *Ephemeral) Disposable() bool { return true }
 
 // Close drops the disposable database, forcing off any lingering connections.
+//
+// Teardown must survive cancellation of the run's context. When a run is
+// interrupted — Ctrl-C cancels ctx — dropping the disposable database is exactly
+// what still needs to happen, but a cancelled ctx would abort the connect and the
+// database would be orphaned on the (possibly shared) admin server. So Close
+// detaches from the caller's cancellation and bounds the drop with its own
+// timeout: the one operation that must not be skipped on interrupt.
 func (e *Ephemeral) Close(ctx context.Context) error {
 	if e.name == "" {
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	admin, err := pgx.ConnectConfig(ctx, e.adminCfg)
 	if err != nil {
 		return fmt.Errorf("connect to drop disposable database: %w", err)

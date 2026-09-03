@@ -2,6 +2,7 @@ package profile
 
 import (
 	"context"
+	"strings"
 
 	"github.com/rowshape/rowshape/internal/fixture"
 )
@@ -24,7 +25,62 @@ func (r *reader) measurePartitions(ctx context.Context, t tableRef) (*fixture.Pa
 	if err != nil {
 		return nil, err
 	}
-	return &fixture.Partitions{Count: count, Strategy: strategy, Skew: round6(skew)}, nil
+	key, err := r.partitionKey(ctx, t.oid)
+	if err != nil {
+		return nil, err
+	}
+	return &fixture.Partitions{Count: count, Strategy: strategy, Key: key, Skew: round6(skew)}, nil
+}
+
+// partitionKey reads the partition key — the part inside the parentheses of
+// `PARTITION BY <strategy> (...)`.
+//
+// pg_get_partkeydef renders the whole clause ("RANGE (occurred_at)"), and the
+// strategy is already a field of its own, so only the parenthesised key is kept:
+// duplicating the strategy would be one more thing that can disagree with itself.
+// Available since PG 10, so no version gate is needed.
+func (r *reader) partitionKey(ctx context.Context, oid uint32) (string, error) {
+	const q = `SELECT COALESCE(pg_get_partkeydef($1), '')`
+	var def string
+	if err := r.tx.QueryRow(ctx, q, oid).Scan(&def); err != nil {
+		return "", err
+	}
+	open := strings.Index(def, "(")
+	closeAt := strings.LastIndex(def, ")")
+	if open < 0 || closeAt <= open {
+		// An unrecognized rendering is left empty rather than mangled: a consumer then
+		// reports that it cannot rebuild the partitioning, which is honest, instead of
+		// declaring PARTITION BY over a key that is not the real one.
+		return "", nil
+	}
+	return strings.TrimSpace(def[open+1 : closeAt]), nil
+}
+
+// partitionTotalBytes sums the on-disk size of a partitioned parent and every
+// partition beneath it.
+//
+// pg_total_relation_size on the parent alone returns its OWN storage, which for a
+// partitioned table is zero — the rows live in the partitions. A 400GB partitioned
+// table therefore reported `bytes: 0`, and every size-driven duration bucket for
+// it extrapolated from nothing, understating exactly the migrations that matter
+// most.
+//
+// A recursive walk of pg_inherits rather than pg_partition_tree: the latter
+// arrived in PG 12 and the supported matrix starts at 10. It also handles
+// sub-partitioning, which a single-level query would silently undercount.
+func (r *reader) partitionTotalBytes(ctx context.Context, oid uint32) (int64, error) {
+	const q = `
+WITH RECURSIVE tree AS (
+    SELECT $1::oid AS oid
+  UNION ALL
+    SELECT i.inhrelid FROM pg_inherits i JOIN tree t ON i.inhparent = t.oid
+)
+SELECT COALESCE(sum(pg_total_relation_size(oid)), 0)::bigint FROM tree`
+	var total int64
+	if err := r.tx.QueryRow(ctx, q, oid).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // partitionTotalRows returns the summed planner row estimate across a

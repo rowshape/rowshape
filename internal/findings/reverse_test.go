@@ -80,6 +80,53 @@ tables:
 	}
 }
 
+// TestIsNarrowingStringLengths pins the length comparison for character types.
+// isNarrowing used to flag ANY string change whose new type carried a length
+// modifier — so widening varchar(100) -> varchar(200) misfired as an
+// irreversible truncation, a wrong WARN on a safe, common migration. It now
+// compares the actual caps.
+func TestIsNarrowingStringLengths(t *testing.T) {
+	cases := []struct {
+		old, new string
+		want     bool
+	}{
+		{"varchar(100)", "varchar(200)", false},         // widen: not narrowing
+		{"varchar(200)", "varchar(100)", true},          // shrink: narrowing
+		{"varchar(100)", "varchar(100)", false},         // same cap
+		{"varchar(100)", "text", false},                 // drop the cap: widen
+		{"text", "varchar(255)", true},                  // gain a cap: can truncate
+		{"character varying(50)", "varchar(80)", false}, // widen across spellings
+		{"char(10)", "char(4)", true},                   // shrink char
+		{"integer", "bigint", false},                    // widen numeric (unaffected)
+		{"bigint", "integer", true},                     // narrow numeric (unaffected)
+	}
+	for _, tc := range cases {
+		if got := isNarrowing(tc.old, tc.new); got != tc.want {
+			t.Errorf("isNarrowing(%q, %q) = %v, want %v", tc.old, tc.new, got, tc.want)
+		}
+	}
+}
+
+// TestRSReverseWideningStringNotFlagged is the analyzer-level guard: a
+// varchar-widening migration must produce no RS-REVERSE-003.
+func TestRSReverseWideningStringNotFlagged(t *testing.T) {
+	f, err := fixture.Parse([]byte(`rowshape_fixture: "1"
+meta: {id: t, engine: {name: postgres, version: "16"}}
+tables:
+  public.users:
+    rows: {value: 1000000, confidence: exact}
+    columns:
+      name: {type: 'varchar(100)', nullable: false}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	widen := "ALTER TABLE public.users ALTER COLUMN name TYPE varchar(200);"
+	if got := (rsReverse{}).Analyze(f, plainCapture(widen)); len(got) != 0 {
+		t.Errorf("widening varchar(100)->varchar(200) must not be flagged, got %+v", got)
+	}
+}
+
 // TestRSReverseCorpusVerdicts runs the RS-REVERSE analyzer against the dedicated
 // reverse-* corpus cases and asserts each expected verdict — the corpus triples
 // land with the finding (the ordering discipline, PRD §14).

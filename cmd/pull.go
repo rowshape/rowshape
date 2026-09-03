@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -24,7 +25,9 @@ type pullOptions struct {
 	iKnow             bool
 	maxEscalationRows int64
 	exact             bool
-	statementTimeout  time.Duration
+	stmtTimeout       time.Duration
+	lockTimeout       time.Duration
+	idleTimeout       time.Duration
 }
 
 // newPullCmd reads production shape read-only and emits a committable
@@ -34,7 +37,10 @@ type pullOptions struct {
 // profiling (P1-T4), privacy redaction (P1-T5), and the assembled emitter
 // (P1-T6) layer on top.
 func newPullCmd() *cobra.Command {
-	opts := &pullOptions{out: "rowshape.yaml", privacy: "standard", maxEscalationRows: profile.DefaultMaxEscalationRows}
+	opts := &pullOptions{out: "rowshape.yaml", privacy: "standard", maxEscalationRows: profile.DefaultMaxEscalationRows,
+		stmtTimeout: profile.DefaultStatementTimeout,
+		lockTimeout: profile.DefaultLockTimeout,
+		idleTimeout: profile.DefaultIdleInTransactionTimeout}
 	cmd := &cobra.Command{
 		Use:   "pull [connection-url]",
 		Short: "Read a database's shape (read-only) and emit rowshape.yaml",
@@ -49,6 +55,13 @@ func newPullCmd() *cobra.Command {
 			if len(args) == 1 {
 				opts.dsn = args[0]
 			}
+			// --exact is documented as a full streaming pass taking "minutes to
+			// hours", so the fast-mode statement cap would turn a slow-but-correct
+			// run into a mysterious partial failure. Disable the ceiling for
+			// --exact unless the operator asked for one explicitly.
+			if opts.exact && !cmd.Flags().Changed("statement-timeout") {
+				opts.stmtTimeout = -1
+			}
 			return runPull(cmd.Context(), opts)
 		},
 	}
@@ -59,8 +72,12 @@ func newPullCmd() *cobra.Command {
 	f.BoolVar(&opts.iKnow, "i-know", false, "override the refusal to run as a superuser")
 	f.Int64Var(&opts.maxEscalationRows, "max-escalation-rows", opts.maxEscalationRows,
 		"skip uniqueness escalation on tables larger than this (0 = default, negative = no cap)")
-	f.DurationVar(&opts.statementTimeout, "statement-timeout", 0,
-		"server-side cap on any single query (0 = the mode default: 10m in fast mode, none with --exact)")
+	f.DurationVar(&opts.stmtTimeout, "statement-timeout", opts.stmtTimeout,
+		"cap one profiling query against the source database (negative disables it; --exact defaults to disabled)")
+	f.DurationVar(&opts.lockTimeout, "lock-timeout", opts.lockTimeout,
+		"cap how long a read waits for its lock, so pull never queues behind a pending ALTER TABLE (negative disables it)")
+	f.DurationVar(&opts.idleTimeout, "idle-timeout", opts.idleTimeout,
+		"cap how long the read transaction may sit idle, so a stalled client cannot hold back vacuum (negative disables it)")
 	f.BoolVar(&opts.exact, "exact", false, "full streaming pass: exact null counts and measured (HLL) distinct for every column (minutes to hours)")
 	return cmd
 }
@@ -89,20 +106,22 @@ func runPull(ctx context.Context, opts *pullOptions) error {
 		fmt.Fprintf(os.Stderr, "rowshape pull: warning: %s\n", w)
 	}
 
-	// Fast mode gets a statement cap; --exact deliberately does not. --exact is
-	// documented as a full streaming pass taking "minutes to hours", so capping
-	// it would break the mode's whole purpose — a slow-but-correct run would
-	// become a mysterious partial failure. --statement-timeout overrides either.
-	limits := dsn.ScanDefaults
-	if opts.exact {
-		limits.Statement = 0
+	// Identify the connection in pg_stat_activity. Without it a DBA watching their
+	// primary during a pull sees an anonymous session running unfamiliar aggregates
+	// against their largest tables, with nothing to attribute it to — and "what is
+	// this connection" is a question that gets tools banned from production.
+	//
+	// Only when the caller has not set one: an operator who chose their own
+	// application_name did so for a reason, most likely to satisfy a monitoring rule.
+	if cfg.RuntimeParams == nil {
+		cfg.RuntimeParams = map[string]string{}
 	}
-	if opts.statementTimeout != 0 {
-		limits.Statement = opts.statementTimeout
+	if cfg.RuntimeParams["application_name"] == "" {
+		cfg.RuntimeParams["application_name"] = "rowshape/" + version
 	}
-	dsn.Apply(cfg, limits)
 
 	rlog.Debug("connecting", "host", host, "database", cfg.Database, "user", cfg.User, "tls", cfg.TLSConfig != nil)
+
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		// Never surface the DSN — it may carry a password. But "it failed" alone
@@ -124,16 +143,26 @@ func runPull(ctx context.Context, opts *pullOptions) error {
 	}
 
 	f, err := profile.Fast(ctx, conn, profile.Options{
-		Schemas:           opts.schemas,
-		Privacy:           level,
-		Exact:             opts.exact,
-		MaxEscalationRows: opts.maxEscalationRows,
+		Schemas:                  opts.schemas,
+		Privacy:                  level,
+		Exact:                    opts.exact,
+		MaxEscalationRows:        opts.maxEscalationRows,
+		StatementTimeout:         opts.stmtTimeout,
+		LockTimeout:              opts.lockTimeout,
+		IdleInTransactionTimeout: opts.idleTimeout,
 		Warn: func(msg string) {
 			fmt.Fprintf(os.Stderr, "rowshape pull: warning: %s\n", msg)
 		},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rowshape pull: profiling failed: %v\n", err)
+		// A profiling read that hits the ceiling DEGRADES to a missing fact; only a
+		// STRUCTURAL read reaches here, and a structure read that times out leaves
+		// nothing to describe. Say which knob is responsible rather than leaving the
+		// operator with a bare SQLSTATE.
+		if strings.Contains(err.Error(), "57014") {
+			fmt.Fprintln(os.Stderr, "rowshape pull: the CATALOG read hit --statement-timeout; without it there is no schema to describe, so this is fatal rather than a dropped fact — raise --statement-timeout")
+		}
 		return toolError()
 	}
 
@@ -154,6 +183,16 @@ func runPull(ctx context.Context, opts *pullOptions) error {
 		return toolError()
 	}
 	fmt.Fprintf(os.Stderr, "rowshape pull: wrote %s (%d tables)\n", opts.out, len(f.Tables))
+	// A fixture only works if it gets COMMITTED (RFC §3.3). One that has quietly
+	// grown past the budget stops fitting in a diff, and the failure mode is that
+	// nobody notices until a reviewer refuses it — so say so at the moment it is
+	// written, and name what actually reduces it.
+	if fixture.OverBudget(len(out), len(f.Tables)) {
+		fmt.Fprintf(os.Stderr, "rowshape pull: warning: %s is %d KiB across %d tables, over the %d KiB budget "+
+			"a %d-table fixture should keep to (RFC §3.3) — narrow it with --schema, or split the schema "+
+			"across fixtures, so it stays reviewable in a diff\n",
+			opts.out, len(out)/1024, len(f.Tables), fixture.BudgetBytes/1024, fixture.BudgetTables)
+	}
 	return nil
 }
 

@@ -75,6 +75,35 @@ func TestEphemeralLifecycle(t *testing.T) {
 	}
 }
 
+// TestCloseDropsWhenContextCancelled: teardown must survive cancellation of the
+// run's context. On Ctrl-C the run's context is cancelled and THEN the deferred
+// Close runs — if Close honored that cancellation it would fail to connect and
+// orphan the disposable database on the admin server. Close detaches from the
+// caller's cancellation for exactly this reason.
+func TestCloseDropsWhenContextCancelled(t *testing.T) {
+	dsn := adminDSN(t)
+
+	e, err := NewEphemeral(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("NewEphemeral: %v", err)
+	}
+	name := e.Name()
+	if !dbExists(t, dsn, name) {
+		t.Fatalf("disposable database %q was not created", name)
+	}
+
+	// Simulate the interrupted run: the context handed to Close is already dead.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := e.Close(ctx); err != nil {
+		t.Fatalf("Close with a cancelled context must still drop the database, got: %v", err)
+	}
+	if dbExists(t, dsn, name) {
+		t.Errorf("disposable database %q was orphaned — Close honored the cancelled context", name)
+	}
+}
+
 // TestLoadIntoEphemeral: a full hydration into a disposable database loads the
 // right row counts and satisfies unique/NOT NULL constraints (RFC §13).
 func TestLoadIntoEphemeral(t *testing.T) {

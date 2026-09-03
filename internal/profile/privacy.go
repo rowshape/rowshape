@@ -109,8 +109,62 @@ func ApplyPrivacy(f *fixture.Fixture, level Privacy, k int) {
 					tbl.Constraints[i].Expression = "opaque"
 				}
 			}
+			// A STORED generated column's expression is the same class of information
+			// as a CHECK — DDL that can name business logic — so it gets the same
+			// treatment. `generated: stored` survives, so a consumer still knows the
+			// column is computed and can report that it cannot reproduce it.
+			for cname, col := range tbl.Columns {
+				changed := false
+				if col.GeneratedExpression != "" {
+					col.GeneratedExpression = "opaque"
+					changed = true
+				}
+				// A DEFAULT is DDL of the same class and can embed a literal from the
+				// business domain, so it gets the same treatment.
+				if col.Default != "" {
+					col.Default = "opaque"
+					changed = true
+				}
+				if changed {
+					tbl.Columns[cname] = col
+				}
+			}
 		}
 		f.Tables[tname] = tbl
+	}
+
+	if level == PrivacyStrict {
+		applyTypePrivacy(f)
+	}
+}
+
+// applyTypePrivacy redacts user-defined type definitions under privacy:strict
+// (RFC §6.7, §8.2).
+//
+// Enum labels and a domain's CHECK are the same class of information as a table's
+// verbatim CHECK expression, which strict already turns opaque: both are DDL text
+// that can name things from the business domain (an enum of internal plan tiers, a
+// bound that reveals a threshold). So strict withholds them.
+//
+// What strict does NOT drop is label_count. Cardinality is shape, and dropping it
+// would make an enum column unhydratable rather than merely anonymous — the same
+// trade strict already makes for a column, where `distinct` survives and the value
+// set does not. The emitter synthesizes placeholder labels from the count, so a
+// strict fixture still reconstructs a type of the right size.
+func applyTypePrivacy(f *fixture.Fixture) {
+	for name, t := range f.Types {
+		switch t.Kind {
+		case "enum":
+			if t.LabelCount == 0 {
+				t.LabelCount = len(t.Labels)
+			}
+			t.Labels = nil
+		case "domain":
+			if t.Check != "" {
+				t.Check = "opaque"
+			}
+		}
+		f.Types[name] = t
 	}
 }
 

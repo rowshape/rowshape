@@ -11,6 +11,9 @@ environment and return a machine-readable verdict.
 
 ## Build
 
+Requires **Go 1.25.0 or newer** — the floor declared in `go.mod`, and the floor on
+`go install github.com/rowshape/rowshape@latest`.
+
 ```sh
 go build ./...        # builds the single `rowshape` binary
 go vet ./...
@@ -33,7 +36,7 @@ go test ./... -count=1
 ```
 
 Without it those tests report nothing, which reads exactly like passing. CI sets
-the DSN and runs the corpus across the PG 10–17 matrix
+the DSN and runs the corpus across the PG 10–18 matrix
 ([`corpus.yml`](.github/workflows/corpus.yml)).
 
 ### A throwaway Postgres, without Docker

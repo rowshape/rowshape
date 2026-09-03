@@ -59,11 +59,30 @@ var catalog = map[string]Explanation{
 		Remediation: "Repair or exclude the rows that violate the predicate before adding the CHECK (or widen the predicate). Add the constraint NOT VALID, fix the data, then VALIDATE.",
 		References:  []string{"RFC §6.1", "RFC §6.4", "PRD §10"},
 	},
+	// RS-APPLY is a SEVENTH namespace beyond the six INV-VERDICT-STABLE names, and
+	// it is deliberately not one of them. The other six classify HAZARDS found in a
+	// migration that ran; this one says the migration did not run. Folding it into
+	// RS-DATA would claim the data rejected a statement that may never have parsed.
+	// Recorded as a contract extension in docs/DECISIONS.md D-023.
+	"RS-APPLY-001": {
+		Code:        "RS-APPLY-001",
+		Title:       "Migration did not apply",
+		Summary:     "A statement in the migration was rejected by the database, so nothing downstream was evaluated. The verdict carries the engine's own SQLSTATE and message, and the file and line the statement came from.",
+		Remediation: "Read the SQLSTATE and message in the finding's evidence: they are the database's own words about what it refused. Fix the statement at the reported file and line, then re-run validate. A class-23 code (23505 unique_violation, 23502 not_null_violation, 23514 check_violation) means production-shaped DATA rejected it — the migration is syntactically fine and the data does not permit it. A class-42 code (42P01 undefined_table, 42703 undefined_column, 42601 syntax_error) means the statement does not match the schema it was written against.",
+		References:  []string{"PRD §10", "RFC §13"},
+	},
 	"RS-INDEX-001": {
 		Code:        "RS-INDEX-001",
 		Title:       "Non-concurrent CREATE INDEX blocks writes",
 		Summary:     "A plain CREATE INDEX holds a lock that blocks writes for the whole O(n log n) build. On a large table that is a long write outage.",
 		Remediation: "Use CREATE INDEX CONCURRENTLY: it builds in two passes without an exclusive lock, so writes continue. Run it outside a transaction block.",
+		References:  []string{"RFC §6.5", "RFC §9.1", "PRD §10"},
+	},
+	"RS-INDEX-002": {
+		Code:        "RS-INDEX-002",
+		Title:       "ADD PRIMARY KEY or UNIQUE builds an index under ACCESS EXCLUSIVE",
+		Summary:     "Adding a PRIMARY KEY or UNIQUE constraint over existing data builds a unique index while holding an ACCESS EXCLUSIVE lock — no reads or writes proceed for the whole O(n log n) build, and ADD PRIMARY KEY also scans the column for NULLs. On a large table that is a full outage, not just a write block. This is the lock cost of building the constraint, separate from whether the data lets it build at all (RS-DATA-014).",
+		Remediation: "Build the index first without the exclusive lock, then adopt it: CREATE UNIQUE INDEX CONCURRENTLY on the column(s), then attach it with ALTER TABLE ... ADD PRIMARY KEY/UNIQUE USING INDEX <name>, which holds the exclusive lock only briefly. For a PRIMARY KEY, ensure the column is already NOT NULL first (add a validated CHECK (col IS NOT NULL) if needed).",
 		References:  []string{"RFC §6.5", "RFC §9.1", "PRD §10"},
 	},
 	"RS-INDEX-010": {
@@ -115,15 +134,8 @@ var catalog = map[string]Explanation{
 		Remediation: "Split it in two. First ADD CONSTRAINT ... NOT VALID, which takes only a brief lock and applies to new and updated rows immediately. Then, in a separate statement (and ideally a separate migration), VALIDATE CONSTRAINT, which scans the table under a SHARE UPDATE EXCLUSIVE lock that does not block reads or writes. Keep the two apart: doing both in one transaction holds the exclusive lock across the scan anyway and gains nothing (RS-CONSTRAINT-001).",
 		References:  []string{"PRD §10", "RFC §9.1"},
 	},
-	"RS-LOCK-002": {
-		Code:        "RS-LOCK-002",
-		Title:       "ADD PRIMARY KEY builds an index under ACCESS EXCLUSIVE",
-		Summary:     "ADD PRIMARY KEY builds a unique index over every row and holds ACCESS EXCLUSIVE for the whole build, blocking reads and writes. There is no CONCURRENTLY form of ADD PRIMARY KEY, so the operation cannot be made online directly.",
-		Remediation: "Build the index first and then adopt it: CREATE UNIQUE INDEX CONCURRENTLY idx ON t (id); then ALTER TABLE t ADD CONSTRAINT t_pkey PRIMARY KEY USING INDEX idx; The second statement still takes ACCESS EXCLUSIVE but only briefly, because the index already exists and does not have to be built under the lock. The column must already be NOT NULL — add that separately, and check RS-DATA-001 for how.",
-		References:  []string{"PRD §10", "RFC §9.1"},
-	},
-	"RS-INDEX-002": {
-		Code:        "RS-INDEX-002",
+	"RS-INDEX-003": {
+		Code:        "RS-INDEX-003",
 		Title:       "DROP INDEX without CONCURRENTLY takes ACCESS EXCLUSIVE on the table",
 		Summary:     "A non-concurrent DROP INDEX takes ACCESS EXCLUSIVE on the TABLE, not merely on the index — so every read and write on the table queues behind it, and behind anything already holding a conflicting lock. The drop itself is fast, which is exactly why it looks harmless in a sandbox: the risk is the lock queue on a busy table, not the work.",
 		Remediation: "Use DROP INDEX CONCURRENTLY, which takes only SHARE UPDATE EXCLUSIVE and does not block reads or writes. It cannot run inside a transaction block (see RS-TX-001), so it needs its own migration with the runner's transaction wrapping disabled. Set a short lock_timeout either way, so a drop that cannot get its lock fails fast instead of queueing every query behind it.",

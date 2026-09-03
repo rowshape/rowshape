@@ -19,19 +19,38 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rowshape/rowshape/internal/findings"
 	"github.com/rowshape/rowshape/internal/fixture"
 )
 
-// KnownCodes are the permanent, namespaced finding codes (INV-VERDICT-STABLE).
-// It is a deliberate hand-maintained list rather than a derived one: the corpus
-// is the thing that checks the catalog, so deriving its vocabulary FROM the
-// catalog would let a typo in a new code validate itself. TestKnownCodesMatchRegistry
-// guards the other direction — that a family added to the registry is not
-// forgotten here.
-var KnownCodes = map[string]bool{
-	"RS-LOCK": true, "RS-DATA": true, "RS-CONSTRAINT": true,
-	"RS-INDEX": true, "RS-PERF": true, "RS-REVERSE": true,
-	"RS-DEPLOY": true, "RS-TX": true,
+// KnownCodes are the permanent, namespaced finding FAMILIES a corpus case may
+// name (INV-VERDICT-STABLE), derived from the finding registry rather than listed
+// here.
+//
+// It used to be a hand-written list of six, which made it the FOURTH place the
+// namespaces were enumerated — alongside the invariant in prd.json, the Finding
+// doc comment in internal/verdict, and the registry itself. Adding RS-APPLY
+// (D-023) had to touch all of them, and the one that was missed failed as
+// `unknown finding code "RS-APPLY"` on a case that was perfectly correct. A list
+// that must be updated in lockstep with another list is a list that will drift.
+//
+// The registry is the single source: every documented code belongs to a family,
+// and a family exists exactly when a code in it does.
+var KnownCodes = knownFamilies()
+
+// knownFamilies reduces the registry's full codes (RS-LOCK-001) to the families a
+// corpus case names (RS-LOCK). A code with no numeric suffix contributes itself,
+// so an unexpected shape widens the set rather than silently dropping out of it.
+func knownFamilies() map[string]bool {
+	out := map[string]bool{}
+	for _, code := range findings.Codes() {
+		family := code
+		if i := strings.LastIndex(code, "-"); i > 0 {
+			family = code[:i]
+		}
+		out[family] = true
+	}
+	return out
 }
 
 // KnownVerdicts are the three verdict values (PRD §10).

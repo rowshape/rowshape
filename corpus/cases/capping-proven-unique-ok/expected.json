@@ -1,5 +1,14 @@
 {
-  "description": "ADD CONSTRAINT UNIQUE against uniqueness proven exact can PASS — the §7.4 boundary on the safe side.",
-  "verdict": "PASS",
-  "findings": []
+  "description": "ADD CONSTRAINT UNIQUE with uniqueness proven exact: the DATA will build (no RS-DATA-014), but building the unique index still holds ACCESS EXCLUSIVE — RS-INDEX-002 WARN. The two hazards are distinct; proven uniqueness removes the data finding, not the lock.",
+  "verdict": "WARN",
+  "findings": [
+    {
+      "code": "RS-INDEX",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
+  ]
 }

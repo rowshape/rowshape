@@ -2,8 +2,10 @@ package conformance
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -67,6 +69,8 @@ func TestNonConformantFixturesAreRejected(t *testing.T) {
 	}{
 		{"fixtures/invalid/range-on-text.yaml", "§6.1 no range on text"},
 		{"fixtures/invalid/unique-from-sample.yaml", "§7.2 uniqueness never from a sample"},
+		{"fixtures/invalid/include-in-key.yaml", "§6.5 INCLUDE payload is not part of the key"},
+		{"fixtures/invalid/extension-type-undeclared.yaml", "§6.8 a schema depending on an extension declares it"},
 	}
 	for _, c := range cases {
 		t.Run(filepath.Base(c.file), func(t *testing.T) {
@@ -108,6 +112,51 @@ func TestRowshapeValidatorIsConformant(t *testing.T) {
 	}
 }
 
+// TestSchemaVersionPatternAgreesWithParser: the published schema's version
+// constraint and the Go parser must accept and refuse the SAME versions. They
+// diverged — the parser reduced "1.0"/"1.4" to major "1" and accepted them while
+// the schema's `const: "1"` rejected them, so a fixture rowshape validated failed
+// `check-jsonschema`. Both now implement RFC §12 major-compatibility.
+func TestSchemaVersionPatternAgreesWithParser(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "schema", "rowshape.schema.json"))
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	var doc struct {
+		Properties struct {
+			RowshapeFixture struct {
+				Pattern string `json:"pattern"`
+			} `json:"rowshape_fixture"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse schema: %v", err)
+	}
+	rx, err := regexp.Compile(doc.Properties.RowshapeFixture.Pattern)
+	if err != nil {
+		t.Fatalf("schema version pattern %q is not a valid regexp: %v", doc.Properties.RowshapeFixture.Pattern, err)
+	}
+
+	for _, tc := range []struct {
+		version string
+		valid   bool
+	}{
+		{"1", true}, {"1.4", true}, {"1.0", true},
+		{"2", false}, {"99", false}, {"", false},
+	} {
+		schemaOK := rx.MatchString(tc.version)
+
+		doc := "rowshape_fixture: \"" + tc.version + "\"\nmeta:\n  engine: { name: postgres, version: \"16\" }\n  profile: { mode: fast }\ntables: {}\n"
+		_, perr := fixture.Parse([]byte(doc))
+		var ve *fixture.VersionError
+		parserOK := !errors.As(perr, &ve)
+
+		if schemaOK != tc.valid || parserOK != tc.valid {
+			t.Errorf("version %q: schema accepts=%v, parser accepts=%v, want %v (they must agree)", tc.version, schemaOK, parserOK, tc.valid)
+		}
+	}
+}
+
 // TestSchemaIsPublished: the JSON Schema asset exists, is valid JSON, pins the
 // format version, and stays consistent with the fixture format constants so it
 // cannot silently rot (a full JSON-Schema validation of the reference fixtures
@@ -118,7 +167,10 @@ func TestSchemaIsPublished(t *testing.T) {
 		t.Fatalf("read schema: %v", err)
 	}
 	s := string(data)
-	for _, want := range []string{`"$schema"`, `"$id"`, `"rowshape_fixture"`, `"const": "` + fixture.FormatVersion + `"`, string(fixture.Exact), string(fixture.Measured), string(fixture.Estimated), string(fixture.Declared)} {
+	// The version constraint is a pattern anchored on the known major (accepting
+	// "1" and its minors, refusing "2"), matching checkVersion's RFC §12
+	// major-compatibility — not a bare const that would reject a valid "1.4".
+	for _, want := range []string{`"$schema"`, `"$id"`, `"rowshape_fixture"`, `"pattern": "^` + fixture.FormatVersion + `(`, string(fixture.Exact), string(fixture.Measured), string(fixture.Estimated), string(fixture.Declared)} {
 		if !strings.Contains(s, want) {
 			t.Errorf("published schema is missing %q", want)
 		}
@@ -229,6 +281,155 @@ func TestSchemaAndGoAgreeOnTextTypes(t *testing.T) {
 		if !strings.Contains(pattern, want) {
 			t.Errorf("Go rejects a range on %q but the published schema's pattern does not cover it; "+
 				"the two enforcement points have drifted (schema pattern: %s)", typ, pattern)
+		}
+	}
+}
+
+// TestCheckEmitterUserTypes covers the §6.7 MUSTs. The referenced-but-undefined
+// case is the one with teeth: a column's `type` is only a name, so an undefined
+// type leaves a consumer with no database to build at all — which is exactly the
+// fixture the reference implementation used to emit.
+func TestCheckEmitterUserTypes(t *testing.T) {
+	base := func() *fixture.Fixture {
+		return &fixture.Fixture{
+			RowshapeFixture: fixture.FormatVersion,
+			Meta:            fixture.Meta{Engine: fixture.Engine{Name: "postgres", Version: "16"}},
+			Types: map[string]fixture.UserType{
+				"app.status": {Kind: "enum", Labels: []string{"a", "b"}, LabelCount: 2},
+			},
+			Tables: map[string]fixture.Table{
+				"app.t": {
+					Rows: fixture.Fact[int64]{Value: 1, Confidence: fixture.Exact},
+					Columns: map[string]fixture.Column{
+						"s": {Type: "app.status"},
+					},
+				},
+			},
+		}
+	}
+
+	if vs := CheckEmitter(base()); len(vs) != 0 {
+		t.Fatalf("a well-formed types section reported violations: %v", vs)
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*fixture.Fixture)
+		wantSub string
+	}{
+		{
+			name:    "referenced type undefined",
+			mutate:  func(f *fixture.Fixture) { delete(f.Types, "app.status") },
+			wantSub: "has no entry in `types`",
+		},
+		{
+			name: "enum declares no size",
+			mutate: func(f *fixture.Fixture) {
+				f.Types["app.status"] = fixture.UserType{Kind: "enum"}
+			},
+			wantSub: "neither labels nor label_count",
+		},
+		{
+			name: "label_count disagrees with labels",
+			mutate: func(f *fixture.Fixture) {
+				f.Types["app.status"] = fixture.UserType{Kind: "enum", Labels: []string{"a", "b"}, LabelCount: 5}
+			},
+			wantSub: "label_count is 5 but 2 labels",
+		},
+		{
+			name: "domain without a base",
+			mutate: func(f *fixture.Fixture) {
+				f.Types["app.status"] = fixture.UserType{Kind: "domain"}
+			},
+			wantSub: "no base type",
+		},
+		{
+			name: "unknown kind",
+			mutate: func(f *fixture.Fixture) {
+				f.Types["app.status"] = fixture.UserType{Kind: "composite"}
+			},
+			wantSub: `unknown kind "composite"`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := base()
+			tc.mutate(f)
+			vs := CheckEmitter(f)
+			found := false
+			for _, v := range vs {
+				if strings.Contains(v.Message, tc.wantSub) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("no violation mentioning %q; got %v", tc.wantSub, vs)
+			}
+		})
+	}
+}
+
+// TestBuiltInTypesAreNotReportedAsUndefined: the undefined-type rule keys off a
+// schema qualification, so a length or precision modifier must not be mistaken for
+// one — `numeric(10,2)` contains a dot but is built in.
+func TestBuiltInTypesAreNotReportedAsUndefined(t *testing.T) {
+	f := &fixture.Fixture{
+		RowshapeFixture: fixture.FormatVersion,
+		Meta:            fixture.Meta{Engine: fixture.Engine{Name: "postgres", Version: "16"}},
+		Tables: map[string]fixture.Table{
+			"public.t": {
+				Rows: fixture.Fact[int64]{Value: 1, Confidence: fixture.Exact},
+				Columns: map[string]fixture.Column{
+					"amount": {Type: "numeric(10,2)"},
+					"code":   {Type: "character varying(3)"},
+					"n":      {Type: "integer"},
+					"tags":   {Type: "text[]"},
+				},
+			},
+		},
+	}
+	if vs := CheckEmitter(f); len(vs) != 0 {
+		t.Errorf("built-in types reported as undefined: %v", vs)
+	}
+}
+
+// TestCheckEmitterIndexKeys: an index with neither columns nor keys is unbuildable.
+// The shape catches the specific real mistake — reading only pg_index.indkey, where
+// an expression key is stored as attribute 0 and so vanishes.
+func TestCheckEmitterIndexKeys(t *testing.T) {
+	withIndex := func(ix fixture.Index) *fixture.Fixture {
+		return &fixture.Fixture{
+			RowshapeFixture: fixture.FormatVersion,
+			Meta:            fixture.Meta{Engine: fixture.Engine{Name: "postgres", Version: "16"}},
+			Tables: map[string]fixture.Table{
+				"app.users": {
+					Rows:    fixture.Fact[int64]{Value: 1, Confidence: fixture.Exact},
+					Columns: map[string]fixture.Column{"email": {Type: "text"}},
+					Indexes: []fixture.Index{ix},
+				},
+			},
+		}
+	}
+
+	// The bug: an expression index recorded with no keys at all.
+	vs := CheckEmitter(withIndex(fixture.Index{Name: "users_lower_email_key", Method: "btree", Unique: true}))
+	found := false
+	for _, v := range vs {
+		if strings.Contains(v.Message, "neither columns nor keys") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("an index with no keys was accepted; got %v", vs)
+	}
+
+	// Both well-formed shapes pass.
+	for _, ok := range []fixture.Index{
+		{Name: "i1", Method: "btree", Columns: []string{"email"}},
+		{Name: "i2", Method: "btree", Keys: []string{"lower(email)"}},
+	} {
+		if vs := CheckEmitter(withIndex(ok)); len(vs) != 0 {
+			t.Errorf("well-formed index %q reported violations: %v", ok.Name, vs)
 		}
 	}
 }

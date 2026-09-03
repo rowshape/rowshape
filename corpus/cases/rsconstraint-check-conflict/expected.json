@@ -2,6 +2,17 @@
   "description": "CHECK (balance_cents >= 0) against a range with min -4500 conflicts with existing data — RS-CONSTRAINT error/FAIL.",
   "verdict": "FAIL",
   "findings": [
-    {"code": "RS-CONSTRAINT", "severity": "error"}
+    {
+      "code": "RS-CONSTRAINT",
+      "severity": "error"
+    },
+    {
+      "code": "RS-CONSTRAINT",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
   ]
 }

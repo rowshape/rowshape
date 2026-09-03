@@ -5,6 +5,10 @@
     {
       "code": "RS-LOCK",
       "severity": "warn"
+    },
+    {
+      "code": "RS-INDEX",
+      "severity": "warn"
     }
   ]
 }

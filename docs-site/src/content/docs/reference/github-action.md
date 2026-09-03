@@ -149,7 +149,7 @@ when `json: false` rather than naming a file that does not exist.
 | `runner`       | ―                  | Override runner detection. **Only `rawsql` can be validated today** — `alembic`, `prisma` and `drizzle` projects are detected but their migrations cannot yet be captured, and `validate` refuses with a clear error. |
 | `seed`         | ―                  | Deterministic hydration seed. |
 | `scale`        | ―                  | Fraction of declared rows to hydrate (default `1.0`). |
-| `args`         | ―                  | Extra space-separated flags passed through to `validate` (e.g. `--calibrate`). |
+| `args`         | ―                  | Extra space-separated flags passed through to `validate` (e.g. `--calibrate`, `--statement-timeout 5m`). |
 | `version`      | `latest`           | rowshape release to install (e.g. `v1.2.3`). Ignored when `binary` is set. |
 | `binary`       | ―                  | Path to a prebuilt `rowshape` binary; skips the install step (brew/`go install`, or tests). |
 | `repo`         | `rowshape/rowshape`| Advanced: repo to download the release from. |
@@ -188,6 +188,12 @@ silently degrading to checksum-only.
 
 The captured JSON is the same struct across CLI/MCP/Action; the Action's
 annotate step renders file/line PR annotations and a check summary from it.
+
+A migration statement that runs longer than `validate`'s ceiling (60s by
+default, `--statement-timeout`) is cancelled, and the verdict is floored to
+**WARN** — never PASS, because a statement that did not complete has not been
+shown to be safe, and never FAIL, because nothing rejected it. Raise the ceiling
+via `args` for a deliberately long backfill; `--statement-timeout 0` removes it.
 
 ## PR annotations & check summary
 

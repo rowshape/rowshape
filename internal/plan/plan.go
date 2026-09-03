@@ -84,10 +84,17 @@ func classify(current *fixture.Fixture, s string) Item {
 	table := planTable(s, up)
 	item := Item{Statement: truncate(s, 90), Status: "ok"}
 
+	// Resolve the name as written in the migration onto the fixture's qualified
+	// key BEFORE the lookup. RFC §5 keys tables by qualified name (`public.orders`)
+	// but migrations write `orders`, so a raw map lookup misses every unqualified
+	// reference and misreports a real table on the live schema as `missing-target`
+	// — the same defect ResolveTable exists to prevent in the analyzers.
 	tableExists := false
 	var tbl fixture.Table
 	if table != "" {
-		tbl, tableExists = current.Tables[table]
+		if resolved, ok := current.ResolveTable(table); ok {
+			tbl, tableExists = current.Tables[resolved], true
+		}
 	}
 
 	switch {

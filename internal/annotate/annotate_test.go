@@ -152,6 +152,41 @@ func TestSummaryNoFindings(t *testing.T) {
 	}
 }
 
+// TestSummaryNeutralizesFixtureAndVerdictInjection: a crafted fixture id, digest,
+// or verdict string must not break out of its Markdown context and inject headings
+// into the rendered PR step summary. The id/digest sit in inline-code spans and
+// the verdict in a heading; a backtick or newline previously escaped both.
+func TestSummaryNeutralizesFixtureAndVerdictInjection(t *testing.T) {
+	r := verdict.Result{
+		Verdict: "FAIL\n\n## rowshape: PASS",
+		Fixture: verdict.FixtureRef{
+			ID:     "x`\n\n## rowshape: PASS\n\nAll checks passed",
+			Digest: "sha256:d`e`f0123456789",
+		},
+	}
+	var b strings.Builder
+	WriteSummary(&b, r)
+	out := b.String()
+
+	// The only heading may be the one WriteSummary emits itself (at the very start
+	// of the output). No value may inject a heading at a line start.
+	if n := strings.Count(out, "\n## "); n != 0 {
+		t.Errorf("injected heading rendered (%d '## ' at a line start):\n%s", n, out)
+	}
+	if !strings.HasPrefix(out, "## rowshape:") {
+		t.Errorf("summary should open with the rowshape heading:\n%s", out)
+	}
+	// The "All checks passed" text smuggled in the id must stay inline on the
+	// Fixture line, not become its own line/structure.
+	if strings.Contains(out, "\nAll checks passed") {
+		t.Errorf("id content escaped onto its own line:\n%s", out)
+	}
+	// The backtick in the id must have been neutralized (no stray span open).
+	if strings.Contains(out, "x`") {
+		t.Errorf("backtick in fixture id was not neutralized:\n%s", out)
+	}
+}
+
 // TestSummaryCellEscapesPipe: a remediation containing a pipe must not break the
 // Markdown table.
 func TestSummaryCellEscapesPipe(t *testing.T) {

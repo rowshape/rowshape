@@ -2,6 +2,13 @@
   "description": "Non-concurrent REINDEX of a 4.2 GB, 45%-bloated index rebuilds under lock — RS-INDEX WARN, duration bucketed from index bytes.",
   "verdict": "WARN",
   "findings": [
-    {"code": "RS-INDEX", "severity": "warn"}
+    {
+      "code": "RS-INDEX",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
   ]
 }

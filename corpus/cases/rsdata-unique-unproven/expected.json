@@ -1,7 +1,19 @@
 {
-  "description": "ADD CONSTRAINT UNIQUE against unproven uniqueness cannot PASS (RFC 7.2/7.4) — RS-DATA-014 WARN naming the resolving command.",
+  "description": "ADD CONSTRAINT UNIQUE against unproven uniqueness: RS-DATA-014 WARN (cannot certify the build, RFC 7.2/7.4) plus RS-INDEX-002 WARN (the build holds ACCESS EXCLUSIVE).",
   "verdict": "WARN",
   "findings": [
-    {"code": "RS-DATA", "severity": "warn", "resolve_contains": "pull --exact"}
+    {
+      "code": "RS-DATA",
+      "severity": "warn",
+      "resolve_contains": "pull --exact"
+    },
+    {
+      "code": "RS-INDEX",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
   ]
 }

@@ -11,11 +11,41 @@ package profile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rowshape/rowshape/internal/fixture"
+)
+
+// Session limits `pull` puts on the database it reads.
+//
+// They exist because the entire premise is that `pull` runs against PRODUCTION,
+// and `--exact` is documented as taking "minutes to hours". Without them a single
+// profiling query against a large table runs unbounded; a long-lived read
+// transaction holds back vacuum on every table it has touched; and an ACCESS SHARE
+// lock queued behind a waiting ALTER TABLE stalls every later query on that table.
+// None of that is hypothetical for the customer this is aimed at — it is the
+// standard reason a DBA refuses to let a new tool near a primary.
+const (
+	// DefaultStatementTimeout caps one profiling query. Generous enough for an
+	// aggregate over a large table, short enough that a pathological plan degrades a
+	// fact instead of occupying the server.
+	DefaultStatementTimeout = 5 * time.Minute
+	// DefaultLockTimeout caps how long a read waits for its ACCESS SHARE lock. Short
+	// on purpose: waiting is precisely the state in which `pull` blocks the queue
+	// behind a pending ALTER TABLE, and a lock that is not free in a few seconds is
+	// one worth backing off from.
+	DefaultLockTimeout = 5 * time.Second
+	// DefaultIdleInTransactionTimeout bounds the read transaction when the CLIENT
+	// stalls — a suspended process, a dead network path — which is the case where a
+	// transaction otherwise sits open indefinitely, holding back vacuum.
+	DefaultIdleInTransactionTimeout = 10 * time.Minute
 )
 
 // Options controls a structure read.
@@ -34,6 +64,14 @@ type Options struct {
 	// exact null counts and measured (HLL) distinct over the whole table, and
 	// uniqueness is probed exactly. Minutes to hours; opt-in via `pull --exact`.
 	Exact bool
+	// StatementTimeout, LockTimeout and IdleInTransactionTimeout are the session
+	// limits the read runs under. Zero uses the Default* above; a NEGATIVE value
+	// disables that limit, which has to be asked for explicitly because an unlimited
+	// statement against production is the thing these exist to prevent.
+	StatementTimeout         time.Duration
+	LockTimeout              time.Duration
+	IdleInTransactionTimeout time.Duration
+
 	// Warn, if set, receives operational warnings — notably a column whose
 	// uniqueness escalation was skipped because the table exceeds the cap. pull
 	// wires this to stderr; silent truncation is forbidden.
@@ -65,9 +103,17 @@ func read(ctx context.Context, conn *pgx.Conn, opts Options, profile bool) (*fix
 	// cheap close whether or not an error occurred.
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// SET LOCAL, so the limits last exactly as long as this transaction and nothing
+	// is left behind on a pooled connection. Applied before the first read, because a
+	// limit set after the query it was meant to bound protects nothing.
+	if err := applySessionLimits(ctx, tx, opts); err != nil {
+		return nil, err
+	}
+
 	r := &reader{
 		tx:                tx,
 		attNames:          map[uint32]map[int16]string{},
+		opclassUses:       map[uint32]struct{}{},
 		privacy:           opts.Privacy,
 		maxEscalationRows: effectiveCap(opts.MaxEscalationRows),
 		warn:              opts.Warn,
@@ -103,6 +149,24 @@ func read(ctx context.Context, conn *pgx.Conn, opts Options, profile bool) (*fix
 		f.Tables[t.qualified] = tbl
 	}
 
+	// Define the user-defined types the columns just read refer to (§6.7). This
+	// runs after the table loop because it is driven by the type OIDs that loop
+	// actually saw.
+	types, err := r.userTypes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read user-defined types: %w", err)
+	}
+	f.Types = types
+
+	// Then the extensions those types and the index operator classes come from
+	// (§6.8). This runs last for the same reason: it is driven by the type and
+	// opclass OIDs the table loop actually saw, so nothing unreferenced is recorded.
+	exts, err := r.extensions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read required extensions: %w", err)
+	}
+	f.Extensions = exts
+
 	// Record the profile mode (RFC §7.3): `exact` for a full pass, `targeted` when
 	// auto-escalation fired on a sample-based pass, otherwise `fast`.
 	if profile {
@@ -120,6 +184,50 @@ func read(ctx context.Context, conn *pgx.Conn, opts Options, profile bool) (*fix
 	return f, nil
 }
 
+// applySessionLimits puts the read transaction under a statement timeout, a lock
+// timeout and an idle-in-transaction timeout (PRD §11).
+//
+// SET LOCAL rather than SET: the limits belong to this transaction, and leaving
+// them on a connection a pooler may hand to someone else would be rowshape
+// changing the behaviour of code it knows nothing about.
+//
+// A server that refuses one of these is not a reason to abandon the read — but it
+// IS a reason not to pretend a limit is in force, so the failure is surfaced as a
+// warning rather than swallowed.
+func applySessionLimits(ctx context.Context, tx querier, opts Options) error {
+	limits := []struct {
+		setting string
+		value   time.Duration
+		def     time.Duration
+	}{
+		{"statement_timeout", opts.StatementTimeout, DefaultStatementTimeout},
+		{"lock_timeout", opts.LockTimeout, DefaultLockTimeout},
+		{"idle_in_transaction_session_timeout", opts.IdleInTransactionTimeout, DefaultIdleInTransactionTimeout},
+	}
+	for _, l := range limits {
+		d := l.value
+		if d == 0 {
+			d = l.def
+		}
+		if d < 0 {
+			continue // explicitly disabled by the caller
+		}
+		// Through Query rather than Exec because `querier` is the read-only subset
+		// deliberately shared with the test double; the rows are empty and closed
+		// immediately, which is what makes a SET safe to run this way.
+		q := fmt.Sprintf("SET LOCAL %s = %d", l.setting, d.Milliseconds())
+		rows, err := tx.Query(ctx, q)
+		if err != nil {
+			return fmt.Errorf("set %s: %w", l.setting, err)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("set %s: %w", l.setting, err)
+		}
+	}
+	return nil
+}
+
 // reader holds a read transaction and a per-relation attribute-name cache so
 // column numbers in constraints and indexes resolve to names cheaply.
 type reader struct {
@@ -131,6 +239,110 @@ type reader struct {
 	maxEscalationRows int64    // soft cost ceiling for escalation (P1b-T4)
 	warn              func(string)
 	exact             bool // full-pass exact mode (P1b-T5)
+	// typeUses maps every type OID seen on an in-scope column to the name
+	// format_type rendered for it, so only the types actually referenced are
+	// defined in the fixture (§6.7) — not every type in the database.
+	typeUses map[uint32]string
+	// domainBase maps a domain's rendered name to its base type's rendered name, so
+	// profiling can categorize a domain-typed column by what it actually holds.
+	domainBase map[string]string
+	// opclassUses holds every operator class OID an in-scope index key uses, so
+	// extensions can resolve the ones an extension owns (§6.8). An index declared
+	// `gin (email gin_trgm_ops)` needs pg_trgm and no column type says so.
+	opclassUses map[uint32]struct{}
+}
+
+// profileType is the type a column should be PROFILED as: a domain reduces to its
+// base type, everything else is itself.
+//
+// A domain is a base type plus constraints, so a domain over integer holds
+// integers and deserves a numeric range and histogram. Categorizing it by its own
+// name put it in the text category instead, and the fixture came back with neither
+// — losing the column's shape at the source, before hydrate ever saw it. Domains
+// over domains resolve to the bottom, bounded so a cycle cannot hang the pull.
+func (r *reader) profileType(typ string) string {
+	name := typ
+	for range 16 {
+		base, ok := r.domainBase[name]
+		if !ok || base == "" {
+			return name
+		}
+		name = base
+	}
+	return name
+}
+
+// degrade turns a statement-timeout error into a DROPPED FACT plus a warning, and
+// leaves every other error fatal.
+//
+// The timeouts exist so `pull` cannot hurt the production database it reads, but a
+// ceiling that ABORTS the run makes the tool unusable on exactly the large tables
+// it is for — the operator lowers the limit to be safe and gets no fixture at all.
+// Degrading is the honest middle: the expensive fact is simply absent, which the
+// confidence model already handles (an absent fact cannot license a PASS, RFC
+// §7.4), and the warning names the column and the flag that raises the ceiling.
+//
+// Silent truncation is forbidden, which is why this never drops a fact without
+// saying so. Structural reads do NOT route through here: a catalog read that times
+// out leaves nothing to describe, and pretending otherwise would emit a fixture
+// that claims a table has no columns.
+// guarded runs a degradable profiling read inside a savepoint, so a statement the
+// server cancels does not poison the whole read transaction.
+//
+// Without it the first timeout leaves every later statement failing with
+// `current transaction is aborted, commands ignored until end of transaction
+// block` — so degrading one fact silently destroyed the rest of the pull. The
+// savepoint is per READ rather than per table: a timeout on one column's range
+// must not cost the next column's.
+//
+// Establishing and releasing a savepoint costs two round trips per profiling
+// query. That is the price of a limit that degrades instead of aborting, and it is
+// only paid on the profiling reads — the structural catalog scan runs unguarded.
+func (r *reader) guarded(ctx context.Context, name string, fn func() error) error {
+	sp := "rowshape_" + name
+	if err := r.exec(ctx, "SAVEPOINT "+sp); err != nil {
+		return err
+	}
+	if err := fn(); err != nil {
+		if rbErr := r.exec(ctx, "ROLLBACK TO SAVEPOINT "+sp); rbErr != nil {
+			return rbErr
+		}
+		return err
+	}
+	return r.exec(ctx, "RELEASE SAVEPOINT "+sp)
+}
+
+// exec runs a statement that returns no rows through the read-only querier.
+func (r *reader) exec(ctx context.Context, sql string) error {
+	rows, err := r.tx.Query(ctx, sql)
+	if err != nil {
+		return err
+	}
+	rows.Close()
+	return rows.Err()
+}
+
+func (r *reader) degrade(table, column, fact string, err error) (bool, error) {
+	if err == nil {
+		return false, nil
+	}
+	if !isStatementTimeout(err) {
+		return false, err
+	}
+	r.warnf("%s.%s: %s omitted — the profiling query hit the statement timeout; "+
+		"raise it with --statement-timeout, or use --exact off-peak, to record this fact",
+		table, column, fact)
+	return true, nil
+}
+
+// isStatementTimeout reports whether an error is Postgres cancelling a statement
+// that ran past statement_timeout (SQLSTATE 57014).
+func isStatementTimeout(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "57014"
+	}
+	return false
 }
 
 // warnf emits an operational warning if a sink is configured.
@@ -278,10 +490,27 @@ func (r *reader) columns(ctx context.Context, oid uint32) (map[string]fixture.Co
 	if r.serverMajor >= 12 {
 		generated = "a.attgenerated::text"
 	}
+	// The pg_type join resolves a DOMAIN to its base type. Profiling keys off the
+	// type category, and a domain read as an opaque name fell to the text category:
+	// a domain over integer got no range and no histogram, so `pull` silently lost
+	// the shape of every domain-typed column, and hydrate then had nothing to
+	// generate from. Every atttypid has a pg_type row, so the join drops nothing.
+	// A STORED generated column's expression lives in pg_attrdef, the same place a
+	// DEFAULT does. Without it `generated: stored` says the column is computed but
+	// not from what, so a consumer rebuilt it as an ordinary column and the target
+	// accepted an UPDATE production rejects.
+	genExpr := `''`
+	if r.serverMajor >= 12 {
+		genExpr = `COALESCE(pg_get_expr(ad.adbin, ad.adrelid), '')`
+	}
 	q := `
 SELECT a.attnum, a.attname, format_type(a.atttypid, a.atttypmod),
-       a.attnotnull, a.attidentity::text, ` + generated + `
+       a.attnotnull, a.attidentity::text, ` + generated + `, a.atttypid,
+       CASE WHEN t.typtype = 'd' THEN format_type(t.typbasetype, t.typtypmod) ELSE '' END,
+       ` + genExpr + `
 FROM pg_attribute a
+JOIN pg_type t ON t.oid = a.atttypid
+LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
 WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped
 ORDER BY a.attnum`
 
@@ -300,10 +529,28 @@ ORDER BY a.attnum`
 			name, typ           string
 			notnull             bool
 			identity, generated string
+			typoid              uint32
+			domainBase          string
+			genExprText         string
 		)
-		if err := rows.Scan(&attnum, &name, &typ, &notnull, &identity, &generated); err != nil {
+		if err := rows.Scan(&attnum, &name, &typ, &notnull, &identity, &generated, &typoid,
+			&domainBase, &genExprText); err != nil {
 			return nil, nil, err
 		}
+		if domainBase != "" {
+			if r.domainBase == nil {
+				r.domainBase = map[string]string{}
+			}
+			r.domainBase[typ] = domainBase
+		}
+		// Remember the type by OID so userTypes can resolve enum/domain definitions
+		// exactly, rather than trying to re-parse format_type's rendering. The
+		// rendered name is the map key because that is the string a column's `type`
+		// carries, so a fixture consumer joins the two by equality.
+		if r.typeUses == nil {
+			r.typeUses = map[uint32]string{}
+		}
+		r.typeUses[typoid] = typ
 		col := fixture.Column{
 			Type:     typ,
 			Nullable: !notnull, // structural nullability from the DDL, always exact (§6.1)
@@ -311,8 +558,38 @@ ORDER BY a.attnum`
 		switch {
 		case identity == "a" || identity == "d":
 			col.Generated = "identity"
+			// ALWAYS vs BY DEFAULT is the difference between rejecting an explicit
+			// INSERT value and accepting it, so a migration that supplies one behaves
+			// differently on each.
+			if identity == "a" {
+				col.Identity = "always"
+			} else {
+				col.Identity = "by_default"
+			}
+		case generated == "v":
+			// PostgreSQL 18 added VIRTUAL generated columns, computed on read and never
+			// stored. They are recorded, and deliberately NOT reproduced: a consumer
+			// meeting `generated: virtual` creates an ordinary column and reports it,
+			// exactly as it does for a stored column whose expression is withheld.
+			//
+			// The branch has to exist even before rowshape claims 18, because without
+			// it a virtual column fell through to the DEFAULT case and its generation
+			// expression was recorded as a plain DEFAULT — which the target then emits
+			// on an ordinary column, so an UPDATE production rejects would succeed
+			// there. A wrong verdict from a catalog value this code did not know about.
+			col.Generated = "virtual"
+			col.GeneratedExpression = genExprText
 		case generated == "s":
 			col.Generated = "stored"
+			// pg_attrdef holds the expression for a generated column exactly as it
+			// does for a DEFAULT; only a STORED column's is a generation expression.
+			col.GeneratedExpression = genExprText
+		default:
+			// An ordinary column's pg_attrdef entry IS its DEFAULT. Only reached in the
+			// default branch, so an identity column's implicit nextval(...) — which
+			// `generated` already records — never leaks in as one, and would name a
+			// sequence the target does not have.
+			col.Default = genExprText
 		}
 		cols[name] = col
 		order = append(order, name)
@@ -392,11 +669,60 @@ ORDER BY con.conname`
 
 // indexes reads index structure and size.
 func (r *reader) indexes(ctx context.Context, oid uint32) ([]fixture.Index, error) {
+	// The key-expression array is what makes an EXPRESSION index representable. For
+	// a key that is an expression, indkey holds 0 and the expression text lives in
+	// indexprs, so `columns` alone described a unique index on lower(email) as having
+	// no keys at all — and it was then silently dropped when the disposable database
+	// was built, losing a uniqueness constraint production enforces. pg_get_indexdef
+	// with a column number renders each key (a plain name, or the expression) exactly
+	// as Postgres would, including any DESC / operator class.
+	//
+	// indnkeyatts, not indnatts: an INCLUDE column is payload, not part of the key,
+	// and emitting it as one would change what the index enforces.
+	// The rendered key is assembled here rather than taken from pg_get_indexdef's
+	// per-column form, because that form returns the key EXPRESSION only. It was
+	// believed to include "any DESC or operator class" and it does not: an index
+	// declared `(created_at DESC NULLS LAST)` renders as `created_at`, and
+	// `gin (email gin_trgm_ops)` renders as `email`. So the ordering was silently
+	// dropped, and the trigram index was rebuilt without its operator class and
+	// failed to build at all (`data type text has no default operator class for
+	// access method "gin"`), leaving the disposable database without an index
+	// production has.
+	//
+	// indclass, indoption and indcollation are 0-based vectors parallel to indkey.
+	// Each part is appended only when it is NOT the default, so an ordinary
+	// ascending btree key still renders as the bare column name and fixtures that
+	// have one do not churn:
+	//
+	//   - operator class: omitted when opcdefault, schema-qualified otherwise (the
+	//     extension providing it may not be on the target's search_path);
+	//   - DESC: bit 0 of indoption;
+	//   - NULLS FIRST/LAST: bit 1, emitted only when it differs from the default
+	//     implied by the direction (ASC defaults to NULLS LAST, DESC to NULLS FIRST).
+	//
+	// indclass also feeds opclassUses, which is how an extension requirement hiding
+	// in an index reaches §6.8: gin_trgm_ops needs pg_trgm and no column type says so.
 	const q = `
 SELECT ic.relname, am.amname, ix.indisunique,
        pg_get_expr(ix.indpred, ix.indrelid),
        pg_relation_size(ic.oid),
-       array_to_string(ix.indkey, ' ')
+       array_to_string(ix.indkey, ' '),
+       (SELECT array_agg(
+                 pg_get_indexdef(ix.indexrelid, k.n::int, true)
+                 || CASE WHEN oc.opcdefault THEN ''
+                         WHEN ocn.nspname = 'pg_catalog' THEN ' ' || quote_ident(oc.opcname)
+                         ELSE ' ' || quote_ident(ocn.nspname) || '.' || quote_ident(oc.opcname) END
+                 || CASE WHEN (ix.indoption[k.n-1] & 1) = 1 THEN ' DESC' ELSE '' END
+                 || CASE WHEN (ix.indoption[k.n-1] & 1) = 1 AND (ix.indoption[k.n-1] & 2) = 0 THEN ' NULLS LAST'
+                         WHEN (ix.indoption[k.n-1] & 1) = 0 AND (ix.indoption[k.n-1] & 2) = 2 THEN ' NULLS FIRST'
+                         ELSE '' END
+                 ORDER BY k.n)
+          FROM generate_series(1, ix.indnkeyatts) AS k(n)
+          JOIN pg_opclass oc ON oc.oid = ix.indclass[k.n-1]
+          JOIN pg_namespace ocn ON ocn.oid = oc.opcnamespace),
+       EXISTS (SELECT 1 FROM unnest(ix.indkey) ik WHERE ik = 0),
+       ix.indnkeyatts,
+       array_to_string(ix.indclass, ' ')
 FROM pg_index ix
 JOIN pg_class ic ON ic.oid = ix.indexrelid
 JOIN pg_am am ON am.oid = ic.relam
@@ -412,21 +738,52 @@ ORDER BY ic.relname`
 	var out []fixture.Index
 	for rows.Next() {
 		var (
-			name, method string
-			unique       bool
-			partial      *string
-			bytes        int64
-			indkey       string
+			name, method  string
+			unique        bool
+			partial       *string
+			bytes         int64
+			indkey        string
+			keys          []string
+			hasExpression bool
+			nkeyatts      int16
+			indclass      string
 		)
-		if err := rows.Scan(&name, &method, &unique, &partial, &bytes, &indkey); err != nil {
+		if err := rows.Scan(&name, &method, &unique, &partial, &bytes, &indkey, &keys,
+			&hasExpression, &nkeyatts, &indclass); err != nil {
 			return nil, err
 		}
+		for _, cls := range parseOIDs(indclass) {
+			r.opclassUses[cls] = struct{}{}
+		}
+
+		// indkey holds key columns FOLLOWED BY the INCLUDE payload, so it has to be
+		// split at indnkeyatts. Emitting the payload as part of the key widened a
+		// covering UNIQUE index's key: `UNIQUE (customer_id, created_at) INCLUDE
+		// (total)` was recorded as unique on all three, which is strictly weaker than
+		// what production enforces — a migration that violates the real two-column
+		// uniqueness could reach PASS.
+		attnums := parseAttnums(indkey)
+		keyAtts, includeAtts := splitKeyAtts(attnums, int(nkeyatts))
+
 		idx := fixture.Index{
 			Name:    name,
 			Method:  method,
 			Unique:  unique,
-			Columns: r.namesFor(oid, parseAttnums(indkey)),
+			Columns: r.namesFor(oid, keyAtts),
+			Include: r.namesFor(oid, includeAtts),
 			Bytes:   bytes,
+		}
+		// `keys` is the rendered form of each key, from pg_get_indexdef. It used to be
+		// carried only for an EXPRESSION index, on the reasoning that for plain columns
+		// it would just restate `columns`. It does not always: `DESC NULLS LAST` and a
+		// non-default operator class are part of the rendered key and appear nowhere in
+		// a bare column name, so an index recorded from `columns` alone came back with
+		// its ordering silently dropped, and a trigram index came back unbuildable
+		// (`data type text has no default operator class for access method "gin"`).
+		// Carry it whenever the rendering is not reproducible from the names, which
+		// keeps an ordinary btree index free of the redundancy.
+		if hasExpression || !keysMatchColumns(keys, idx.Columns) {
+			idx.Keys = keys
 		}
 		if partial != nil {
 			idx.Partial = *partial
@@ -436,12 +793,60 @@ ORDER BY ic.relname`
 	return out, rows.Err()
 }
 
-// references reads foreign keys and their on_delete action. Fan-out and
-// orphan_fraction (the measured §6.6 fields) are added by P1-T11.
+// splitKeyAtts splits an index's attribute numbers into its key columns and its
+// INCLUDE payload at nkeyatts. A count outside the slice is clamped, so a catalog
+// shape this code did not anticipate degrades to "all of it is key" — the reading
+// that over-constrains rather than under-constrains.
+func splitKeyAtts(attnums []int16, nkeyatts int) ([]int16, []int16) {
+	if nkeyatts <= 0 || nkeyatts >= len(attnums) {
+		return attnums, nil
+	}
+	return attnums[:nkeyatts], attnums[nkeyatts:]
+}
+
+// keysMatchColumns reports whether pg_get_indexdef's rendered keys say no more
+// than the plain column names do. Postgres renders a plain ascending key on a
+// default operator class as just the (quoted where needed) column name, so any
+// difference means the rendering carries something `columns` cannot: an ordering,
+// a collation, or an operator class.
+func keysMatchColumns(keys, cols []string) bool {
+	if len(keys) != len(cols) {
+		return false
+	}
+	for i, k := range keys {
+		if k != cols[i] && k != `"`+cols[i]+`"` {
+			return false
+		}
+	}
+	return true
+}
+
+// parseOIDs parses a space-separated oidvector rendering ("3126 10042") into OIDs,
+// skipping anything that is not a number.
+func parseOIDs(s string) []uint32 {
+	var out []uint32
+	for _, f := range strings.Fields(s) {
+		n, err := strconv.ParseUint(f, 10, 32)
+		if err != nil {
+			continue
+		}
+		out = append(out, uint32(n))
+	}
+	return out
+}
+
+// references reads foreign keys, their name, their referential actions and
+// whether they are validated. Fan-out and orphan_fraction (the measured §6.6
+// fields) are added by P1-T11.
+//
+// A COMPOSITE key becomes one entry per column pair, which is what fan-out wants
+// — but the entries carry the shared constraint NAME so a consumer can group them
+// back into the one constraint they came from. Without it, rebuilding produced two
+// independent single-column keys, which constrain something else entirely.
 func (r *reader) references(ctx context.Context, oid uint32) ([]fixture.Reference, error) {
 	const q = `
 SELECT con.conkey, con.confkey, con.confrelid, con.confdeltype::text,
-       refcl.relname, refns.nspname
+       refcl.relname, refns.nspname, con.conname, con.confupdtype::text, con.convalidated
 FROM pg_constraint con
 JOIN pg_class refcl ON refcl.oid = con.confrelid
 JOIN pg_namespace refns ON refns.oid = refcl.relnamespace
@@ -459,11 +864,15 @@ ORDER BY con.conname`
 		confrelid           uint32
 		delType             string
 		refTable, refSchema string
+		name                string
+		updType             string
+		validated           bool
 	}
 	var fks []fkRow
 	for rows.Next() {
 		var fk fkRow
-		if err := rows.Scan(&fk.conkey, &fk.confkey, &fk.confrelid, &fk.delType, &fk.refTable, &fk.refSchema); err != nil {
+		if err := rows.Scan(&fk.conkey, &fk.confkey, &fk.confrelid, &fk.delType, &fk.refTable,
+			&fk.refSchema, &fk.name, &fk.updType, &fk.validated); err != nil {
 			return nil, err
 		}
 		fks = append(fks, fk)
@@ -484,11 +893,21 @@ ORDER BY con.conname`
 			if i < len(refCols) {
 				refCol = refCols[i]
 			}
-			out = append(out, fixture.Reference{
+			ref := fixture.Reference{
 				Column:   localCols[i],
 				To:       fk.refSchema + "." + fk.refTable + "." + refCol,
+				Name:     fk.name,
 				OnDelete: onDeleteAction(fk.delType),
-			})
+				OnUpdate: onDeleteAction(fk.updType),
+			}
+			// Only recorded when false: an absent field means validated, which is the
+			// overwhelming majority, and writing `validated: true` on every reference
+			// would be noise in a format meant to be read (§3).
+			if !fk.validated {
+				v := false
+				ref.Validated = &v
+			}
+			out = append(out, ref)
 		}
 	}
 	return out, nil

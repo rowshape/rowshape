@@ -2,6 +2,13 @@
   "description": "ADD COLUMN with a volatile default rewrites all 5M rows under ACCESS EXCLUSIVE — RS-LOCK, a WARN with the expand/backfill/contract recipe.",
   "verdict": "WARN",
   "findings": [
-    {"code": "RS-LOCK", "severity": "warn"}
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
   ]
 }

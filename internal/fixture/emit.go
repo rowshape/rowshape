@@ -133,7 +133,7 @@ func ParseVerified(data []byte) (*Fixture, error) {
 					"  content hashes to:  %s\n"+
 					"This looks like a fixture written by a NEWER rowshape rather than an edited one — the "+
 					"unknown fields were part of what it digested, and this build dropped them. Upgrade "+
-					"rowshape, or re-run `rowshape pull` with this build to regenerate the fixture.",
+					"rowshape, or re-run `rowshape pull` with this build to regenerate the fixture",
 				len(dropped), strings.Join(dropped, ", "), f.Meta.Digest, got)
 		}
 		return nil, fmt.Errorf(
@@ -207,4 +207,32 @@ func droppedKeys(raw []byte) []string {
 	walk(before, after, "")
 	sort.Strings(missing)
 	return missing
+}
+
+// The committable-size budget (RFC §3.3): a fixture has to fit in a git diff, or
+// nobody commits it and the whole premise fails.
+//
+// The numbers are what the emitter ACTUALLY costs, measured from a real
+// `rowshape pull`, not an aspiration. §3.3 originally said "under 100KB for a
+// 200-table schema"; a real 200-table pull is ~246KB, and the only test guarding
+// the claim built its fixture by hand with deliberately sparse facts and passed
+// with under 1% headroom. Nothing was wrong with the emitter — the weight is
+// spread evenly across `range`, `distinct`, `unique` and their confidences, all
+// load-bearing — so the CLAIM was corrected rather than facts dropped to meet it
+// (docs/DECISIONS.md D-021).
+const (
+	// BudgetTables is the schema size the budget is quoted for.
+	BudgetTables = 200
+	// BudgetBytes is the size a BudgetTables-table fixture must stay under.
+	BudgetBytes = 320 * 1024
+)
+
+// OverBudget reports whether a fixture of this size and table count exceeds the
+// §3.3 budget, scaled to its actual table count. Zero tables is never over: there
+// is nothing to be over about.
+func OverBudget(size, tables int) bool {
+	if tables <= 0 {
+		return false
+	}
+	return size/tables*BudgetTables > BudgetBytes
 }

@@ -12,6 +12,61 @@ import (
 	"github.com/rowshape/rowshape/internal/verdict"
 )
 
+// TestRSLockNoRewriteStringWidening: a binary-coercible string widening
+// (varchar(n)->varchar(m>=n), ->text) is a catalog-only change on every supported
+// Postgres — no rewrite, no scan — so it must NOT produce an RS-LOCK rewrite
+// finding. rsLock previously reported EVERY ALTER COLUMN TYPE as a full rewrite,
+// fabricating an extrapolated outage for a metadata-only change.
+func TestRSLockNoRewriteStringWidening(t *testing.T) {
+	f, err := fixture.Parse([]byte(`rowshape_fixture: "1"
+meta: {id: t, engine: {name: postgres, version: "16"}}
+tables:
+  public.users:
+    rows: {value: 50000000, confidence: exact}
+    columns:
+      name: {type: 'varchar(100)', nullable: false}
+      code: {type: 'varchar(20)', nullable: false}
+      note: {type: text, nullable: true}
+      qty:  {type: integer, nullable: false}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cap := func(sql string) *validate.Capture {
+		return &validate.Capture{Success: true, Statements: []validate.Statement{{SQL: sql, DurationMs: 40}}, TableRows: map[string]int64{"public.users": 2000}}
+	}
+	fires := func(sql string) bool {
+		for _, fnd := range (rsLock{}).Analyze(f, cap(sql)) {
+			if fnd.Code == "RS-LOCK-001" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// No-rewrite widenings: must NOT fire.
+	for _, sql := range []string{
+		"ALTER TABLE public.users ALTER COLUMN name TYPE varchar(200)", // widen cap
+		"ALTER TABLE public.users ALTER COLUMN name TYPE text",         // drop cap
+		"ALTER TABLE public.users ALTER COLUMN code TYPE varchar(20)",  // same cap
+	} {
+		if fires(sql) {
+			t.Errorf("no-rewrite string widening must not fire RS-LOCK-001: %q", sql)
+		}
+	}
+
+	// Genuine rewrites / verify scans: must still fire.
+	for _, sql := range []string{
+		"ALTER TABLE public.users ALTER COLUMN name TYPE varchar(50)",  // narrowing cap
+		"ALTER TABLE public.users ALTER COLUMN note TYPE varchar(100)", // text -> capped: verify scan
+		"ALTER TABLE public.users ALTER COLUMN qty TYPE bigint",        // representation change
+	} {
+		if !fires(sql) {
+			t.Errorf("a rewrite/verify-scan type change must still fire RS-LOCK-001: %q", sql)
+		}
+	}
+}
+
 // loadCorpus reads a corpus case's fixture and migration.
 func loadCorpus(t *testing.T, name string) (*fixture.Fixture, string) {
 	t.Helper()

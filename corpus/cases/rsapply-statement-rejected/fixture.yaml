@@ -1,0 +1,13 @@
+rowshape_fixture: "1"
+meta:
+  id: rsapply-statement-rejected
+  engine: {name: postgres, version: "16"}
+  privacy: standard
+  profile: {mode: exact}
+tables:
+  public.users:
+    rows: {value: 1000, confidence: exact}
+    columns:
+      id: {type: bigint, nullable: false, unique: {value: true, confidence: exact, via: constraint}}
+      email: {type: text, nullable: true, null_fraction: {value: 0, confidence: exact, via: scan}}
+    constraints: [{name: users_pkey, kind: primary_key, columns: [id]}]

@@ -133,6 +133,16 @@ func uniquenessState(f *fixture.Fixture, table string, cols []string) uniqState 
 	if !ok || c.Unique == nil {
 		return uniqUnproven
 	}
+	// `unique` MUST be exact or absent (RFC §7.2, INV-UNIQUENESS): uniqueness is
+	// never inferred from a sample. A fact carrying anything weaker than exact —
+	// which a hand-authored or non-conformant fixture can slip in, since
+	// ParseVerified only checks the digest — is not a proof in EITHER direction.
+	// Reading its Value drove a confident FAIL ("proven non-unique … exact") or a
+	// PASS from evidence that was never exact; treat a non-exact fact as absent so
+	// it caps to WARN instead.
+	if c.Unique.Confidence != fixture.Exact {
+		return uniqUnproven
+	}
 	if c.Unique.Value {
 		return uniqProven
 	}

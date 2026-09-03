@@ -59,16 +59,16 @@ func ClassifyConnect(err error) (FailureClass, string) {
 	// different situation from not reaching the server at all.
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		switch {
-		case pgErr.Code == "28P01" || pgErr.Code == "28000":
+		switch pgErr.Code {
+		case "28P01", "28000":
 			return FailAuth, "the server rejected the credentials; check the user and password"
-		case pgErr.Code == "3D000":
+		case "3D000":
 			return FailNoDatabase, "the server is reachable but has no such database; check the database name"
 		// Only 42501 is insufficient_privilege. Class 42 is "syntax error OR
 		// access rule violation", so 42601 (syntax), 42703 (undefined column)
 		// and 42P01 (undefined table) are NOT permission problems, and telling
 		// an operator to check their grants would send them the wrong way.
-		case pgErr.Code == "42501":
+		case "42501":
 			return FailPermission, "the role lacks permission; rowshape needs a role that can read the catalog"
 		}
 		return FailUnknown, "the server refused the connection with SQLSTATE " + pgErr.Code

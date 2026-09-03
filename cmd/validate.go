@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/rowshape/rowshape/internal/dsn"
@@ -36,6 +37,7 @@ type validateOptions struct {
 	scale       float64
 	maxRows     int64
 	iKnowTarget bool // acknowledge that --target is written to and committed
+	stmtTimeout time.Duration
 }
 
 // newValidateCmd applies a proposed migration against a hydrated disposable
@@ -44,7 +46,8 @@ type validateOptions struct {
 // network client. Its blast radius is zero (INV-BLAST-RADIUS-ZERO): there is no
 // `apply`, and it hard-refuses a target whose host matches the fixture's source.
 func newValidateCmd() *cobra.Command {
-	opts := &validateOptions{fixturePath: "rowshape.yaml", migrations: "migrations", scale: 1.0}
+	opts := &validateOptions{fixturePath: "rowshape.yaml", migrations: "migrations", scale: 1.0,
+		stmtTimeout: validate.DefaultStatementTimeout}
 	cmd := &cobra.Command{
 		Use:   "validate [rowshape.yaml]",
 		Short: "Validate a migration against production-shaped data; return a verdict",
@@ -74,11 +77,12 @@ func newValidateCmd() *cobra.Command {
 	f.Int64Var(&opts.maxRows, "max-rows", 0, "cap hydrated rows per table (0 = no cap)")
 	f.BoolVar(&opts.iKnowTarget, "i-know-target-is-writable", false,
 		"proceed with --target when the fixture records no source host to check it against")
+	f.DurationVar(&opts.stmtTimeout, "statement-timeout", opts.stmtTimeout,
+		"cancel a migration statement that runs longer than this (0 = no ceiling); a cancelled statement is reported, never certified")
 	return cmd
 }
 
 func runValidate(ctx context.Context, opts *validateOptions) error {
-
 	data, err := os.ReadFile(opts.fixturePath)
 	if err != nil {
 		return emitToolError(opts.asJSON, toolerror.New(toolerror.FixtureParse, fmt.Sprintf("reading %s failed: %v", opts.fixturePath, err), "check the fixture path"))
@@ -244,6 +248,15 @@ func hydrateApplyEphemeral(ctx context.Context, f *fixture.Fixture, opts *valida
 			redactedTargetError("hydration into the disposable database failed", err),
 			"check the admin connection (--ephemeral) and that the fixture hydrates cleanly; set ROWSHAPE_DEBUG=1 for the underlying error")
 	}
+	// Surfaced before the verdict: a missing UNIQUE index means the disposable
+	// database enforces less than production does, which is exactly the direction that
+	// turns a real FAIL into a PASS.
+	warnSkippedIndexes("validate", report.SkippedIndexes)
+	warnSkippedConstraints("validate", report.SkippedConstraints)
+	warnUnreproducibleGenerated("validate", report.UnreproducibleGenerated)
+	warnUnreproducedPartitions("validate", report.UnreproducedPartitionCount)
+	warnUnreproducibleDefaults("validate", report.UnreproducibleDefaults)
+
 	cap, err := applyAndCapture(ctx, eph, opts)
 	if err != nil {
 		return nil, err
@@ -391,7 +404,7 @@ func applyAndCapture(ctx context.Context, t target.Target, opts *validateOptions
 		if err != nil {
 			return nil, toolerror.New(toolerror.BadUsage, err.Error(), "check the --migrations path")
 		}
-		return applyStatements(ctx, t, stmts)
+		return applyStatements(ctx, t, stmts, opts.stmtTimeout)
 	}
 
 	r, err := detectValidateRunner(opts)
@@ -431,17 +444,17 @@ func applyAndCapture(ctx context.Context, t target.Target, opts *validateOptions
 		}
 		stmts = append(stmts, s...)
 	}
-	return applyStatements(ctx, t, stmts)
+	return applyStatements(ctx, t, stmts, opts.stmtTimeout)
 }
 
 // applyStatements connects to the target and captures each statement.
-func applyStatements(ctx context.Context, t target.Target, stmts []validate.Located) (*validate.Capture, error) {
+func applyStatements(ctx context.Context, t target.Target, stmts []validate.Located, stmtTimeout time.Duration) (*validate.Capture, error) {
 	conn, err := t.Connect(ctx)
 	if err != nil {
 		return nil, toolerror.New(toolerror.ConnectFailed, "could not connect to the target", "check the target is reachable and the credentials are valid")
 	}
 	defer func() { _ = conn.Close(ctx) }()
-	return validate.Apply(ctx, conn, stmts), nil
+	return validate.ApplyWithTimeout(ctx, conn, stmts, stmtTimeout), nil
 }
 
 func detectValidateRunner(opts *validateOptions) (runner.Runner, error) {

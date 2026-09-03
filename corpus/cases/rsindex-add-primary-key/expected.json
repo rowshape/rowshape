@@ -1,0 +1,14 @@
+{
+  "description": "ADD PRIMARY KEY over existing data builds a unique index under ACCESS EXCLUSIVE — RS-INDEX WARN, duration extrapolated to declared rows.",
+  "verdict": "WARN",
+  "findings": [
+    {
+      "code": "RS-INDEX",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
+  ]
+}

@@ -37,6 +37,15 @@ func (rsLock) Analyze(f *fixture.Fixture, c *validate.Capture) []verdict.Finding
 		if !rewrites {
 			continue
 		}
+		// classifyRewrite reports every ALTER COLUMN ... TYPE as a rewrite from the
+		// SQL alone, but a binary-coercible string widening — varchar(n)->varchar(m>=n)
+		// or ->text — is a catalog-only change on PG >= 9.2 (no rewrite, no scan). The
+		// fixture's CURRENT type is what tells a widening from a rewrite, so the check
+		// lives here rather than in the pure-SQL classifier. Reporting an extrapolated
+		// `outage` for a metadata-only change is a fabricated finding.
+		if kind == alterColumnTypeKind && isNoRewriteTypeChange(f, table, st.SQL) {
+			continue
+		}
 		out = append(out, rsLock{}.finding(f, c, i, st, op, table, kind, hasVersion))
 	}
 	return out
@@ -137,9 +146,59 @@ func classifyRewrite(rawSQL string, major int, hasVersion bool) (op estimate.OpC
 		op = estimate.ClassifyAddColumnDefault(false, m)
 		return op, table, "ADD COLUMN with a non-volatile default", op == estimate.TableRewrite
 	case strings.Contains(upper, "ALTER COLUMN") && (strings.Contains(upper, " TYPE ") || strings.Contains(upper, "SET DATA TYPE")):
-		return estimate.TableRewrite, table, "ALTER COLUMN ... TYPE", true
+		return estimate.TableRewrite, table, alterColumnTypeKind, true
 	}
 	return 0, "", "", false
+}
+
+// alterColumnTypeKind is the human description classifyRewrite returns for a
+// column type change; it also gates the string-widening no-rewrite check.
+const alterColumnTypeKind = "ALTER COLUMN ... TYPE"
+
+// isNoRewriteTypeChange reports whether an ALTER COLUMN ... TYPE is a
+// binary-coercible string widening that Postgres performs as a catalog-only
+// change (no table rewrite, no verify scan) on every version rowshape supports.
+//
+// Restricted to the varchar/text pair widening upward:
+//
+//	varchar(n) -> varchar(m>=n)   metadata-only   (suppressed)
+//	varchar(n) -> text            metadata-only   (suppressed)
+//	varchar(200) -> varchar(100)  scans/rewrites  (kept)
+//	text -> varchar(n)            verify scan      (kept — imposes a cap)
+//	char(...) / non-string types  conservative     (kept)
+func isNoRewriteTypeChange(f *fixture.Fixture, table, sql string) bool {
+	clean := collapseSpaces(stripSQLComments(sql))
+	upper := strings.ToUpper(clean)
+	col := columnBeforeTypeChange(clean, upper)
+	newType := typeAfter(clean, upper)
+	c, ok := f.Tables[table].Columns[col]
+	if !ok {
+		return false // unknown current type: keep the conservative rewrite finding
+	}
+	return isStringWidening(c.Type, newType)
+}
+
+// isStringWidening reports whether oldType -> newType is a length-increasing (or
+// cap-removing) change within the varchar/text family — Postgres's documented
+// no-rewrite fast path (§9.1). char is deliberately excluded: it is blank-padded,
+// so a length change can re-pad and rewrite.
+func isStringWidening(oldType, newType string) bool {
+	strOK := func(t string) bool {
+		b := strings.ToLower(strings.TrimSpace(baseSQLType(t)))
+		return b == "text" || b == "varchar" || b == "character varying"
+	}
+	if !strOK(oldType) || !strOK(newType) {
+		return false
+	}
+	newLen, newBounded := typeLength(newType)
+	if !newBounded {
+		return true // -> text / unbounded varchar never truncates or rewrites
+	}
+	oldLen, oldBounded := typeLength(oldType)
+	if !oldBounded {
+		return false // text -> varchar(n) imposes a cap and needs a verify scan
+	}
+	return newLen >= oldLen // varchar(n) -> varchar(m>=n)
 }
 
 // addsColumn matches "ADD <col>" without the optional COLUMN keyword.

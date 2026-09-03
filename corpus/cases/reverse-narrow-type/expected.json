@@ -9,6 +9,10 @@
     {
       "code": "RS-LOCK",
       "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
     }
   ]
 }

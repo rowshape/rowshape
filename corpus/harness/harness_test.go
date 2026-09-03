@@ -89,7 +89,7 @@ func TestCappingContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load corpus: %v", err)
 	}
-	seenCapped, seenBoundary := false, false
+	seenCapped, seenBoundary, seenCleanPass := false, false, false
 	for _, c := range cases {
 		if !strings.HasPrefix(c.Name, "capping-") {
 			continue
@@ -105,13 +105,28 @@ func TestCappingContract(t *testing.T) {
 			}
 		} else {
 			seenBoundary = true
-			if c.Expected.Verdict != "PASS" {
-				t.Errorf("%s rests on a proven fact: expected PASS boundary, got %s", c.Name, c.Expected.Verdict)
+			// A proven fact needs no RESOLUTION: the boundary case must not name a
+			// resolve command. It MAY still WARN for an ORTHOGONAL hazard — a
+			// proven-unique ADD UNIQUE certifies the data (no RS-DATA-014) but its
+			// index still builds under ACCESS EXCLUSIVE (RS-INDEX-002) — so the
+			// contract is "nothing to resolve," not "overall PASS."
+			if namesResolveCommand(c.Expected) {
+				t.Errorf("%s rests on a proven fact and must name no resolve command (nothing to resolve): %+v", c.Name, c.Expected.Findings)
+			}
+			if c.Expected.Verdict == "PASS" {
+				seenCleanPass = true
 			}
 		}
 	}
 	if !seenCapped || !seenBoundary {
-		t.Errorf("capping suite must include both a capped (WARN) case and a proven (PASS) boundary; capped=%v boundary=%v", seenCapped, seenBoundary)
+		t.Errorf("capping suite must include both a capped (WARN) case and a proven boundary; capped=%v boundary=%v", seenCapped, seenBoundary)
+	}
+	// The suite must still contain at least one proven-fact case that is a clean
+	// overall PASS (e.g. capping-exact-not-null), so "capping does not touch a
+	// proven fact" is demonstrated end to end and not only in the presence of an
+	// unrelated finding.
+	if !seenCleanPass {
+		t.Error("capping suite must include a proven-fact case that is a clean overall PASS")
 	}
 }
 

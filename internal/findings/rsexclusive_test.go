@@ -58,8 +58,8 @@ func TestSucceedingOperationsAreStillFlagged(t *testing.T) {
 	cases := []struct{ name, sql, want string }{
 		{"CHECK on valid data", "ALTER TABLE orders ADD CONSTRAINT c CHECK (amount > 0);", "RS-CONSTRAINT-020"},
 		{"FK with no orphans", "ALTER TABLE orders ADD CONSTRAINT f FOREIGN KEY (id) REFERENCES users (id);", "RS-CONSTRAINT-020"},
-		{"ADD PRIMARY KEY", "ALTER TABLE orders ADD PRIMARY KEY (id);", "RS-LOCK-002"},
-		{"DROP INDEX", "DROP INDEX idx_orders_amount;", "RS-INDEX-002"},
+		{"ADD PRIMARY KEY", "ALTER TABLE orders ADD PRIMARY KEY (id);", "RS-INDEX-002"},
+		{"DROP INDEX", "DROP INDEX idx_orders_amount;", "RS-INDEX-003"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

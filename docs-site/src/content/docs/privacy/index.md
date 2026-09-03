@@ -50,6 +50,39 @@ security team will find those fields anyway; pointing at them first is the
 difference between a documented tradeoff and an undisclosed leak. Ship it, read
 it, and decide your privacy level from what it shows — not from a promise.
 
+## What `pull` does to the database it reads
+
+Privacy is not the only question a DBA asks before letting a tool near a
+primary. The other is what it *costs*, and `pull` answers it in writing.
+
+Every read runs inside a **read-only transaction**, under three limits set with
+`SET LOCAL` so they last exactly as long as that transaction and nothing is left
+behind on a pooled connection:
+
+| limit | default | why |
+| --- | --- | --- |
+| `statement_timeout` | 5m | one profiling query can never run unbounded |
+| `lock_timeout` | 5s | `pull` never queues behind a pending `ALTER TABLE` and stalls the queries behind it |
+| `idle_in_transaction_session_timeout` | 10m | a stalled client cannot hold a transaction open and hold back vacuum |
+
+Each is a flag — `--statement-timeout`, `--lock-timeout`, `--idle-timeout` — and
+a **negative** value disables one. Disabling has to be asked for: unlimited
+against production is the thing these exist to prevent.
+
+**Hitting the ceiling degrades, it does not abort.** A profiling query that
+exceeds `statement_timeout` drops the fact it was computing, warns on stderr
+naming the column and the flag, and the run continues — so lowering the limit to
+be safe still gets you a usable fixture. An absent fact cannot license a `PASS`,
+so a degraded fixture is conservative rather than wrong. The one fatal case is
+the catalog read itself timing out, where there is no schema left to describe.
+
+The connection identifies itself as `rowshape/<version>` in `application_name`,
+so it is attributable in `pg_stat_activity` rather than showing up as an
+anonymous session running unfamiliar aggregates.
+
+`pull` also requires a read-only role and refuses to run as a superuser without
+`--i-know`.
+
 ## Why this is safe to commit
 
 - `meta.source` is a salted, per-fixture hash of the host — never the hostname.

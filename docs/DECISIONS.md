@@ -222,8 +222,12 @@ honest than the PRD shorthand; the validated CHECK is the equivalent it can prov
 
 ## D-010 — `range` carries no confidence, so findings resting on it declare `absent` (CR-T11)
 
-**Status:** open — needs an owner/RFC decision. The code change is already made
-and is safe either way; this records the question the change exposed.
+**Status: RESOLVED by D-020 (PR-T7).** `Range` now carries a confidence and
+`factConfidence` resolves `.range`. The reasoning below — that `absent` "can never
+license a PASS" and so the omission was safe either way — turned out to be wrong
+in a way this entry could not see: it protects the verdict of a finding that is
+never MADE. A sampled range made `checkConflict` emit nothing at all, and the
+verdict was PASS. See D-020 for the reproduction and the two-part fix.
 
 `rsconstraint.checkConflict` (RS-CONSTRAINT-010) concludes from a column's
 profiled **range** that a `CHECK` will fail on existing rows. It used to declare
@@ -616,3 +620,372 @@ deliberately, or implement the leaning and pay the retrofit.
 
 That is the only question in the file where the default that shipped contradicts
 the recorded intent.
+
+## D-019 — `validate` caps a migration statement at 60s, and a cancellation is evidence (PR-T15)
+
+Reproducing a hazard faithfully means reproducing how long it takes. Once
+PR-T3 made the disposable database enforce the foreign keys production has,
+the corpus's own `cascade_delete_fanout` case stopped being a paper hazard and
+became one: its `DELETE` matches 244,223 parent rows, each cascading to a
+10,000,000-row child table with **no index on the referencing column** (the
+fixture records none, because production has none). Postgres seq-scans 10M rows
+per deleted parent. The 190-second suite became a ten-minute hard timeout, and
+`validate` had no way to stop.
+
+The hazard is not the bug — reproducing it is the product. The bug is that
+**`validate` had to SURVIVE an outage in order to REPORT one.**
+
+**Decision.** `Apply` sets a session `statement_timeout`, default **60 seconds**,
+exposed as `--statement-timeout` (`0` disables it, deliberately opt-in).
+
+Sixty seconds is chosen against what the number is *used for*, not against how
+long a real migration takes. Hydrated data is a fraction of production and
+`validate` runs inside an agent's turn or a CI job; a statement still running
+after a minute on that data is already decisively in the slow/outage buckets,
+and running it to completion buys no information the ceiling has not given.
+
+**A cancellation is a third outcome, not a flavour of failure.** This is the
+load-bearing part:
+
+| outcome | what happened | verdict floor |
+| --- | --- | --- |
+| completed | nothing objected | whatever the analyzers say |
+| **rejected** | the data or the schema said no (SQLSTATE) | FAIL |
+| **cancelled** | nothing said anything; it did not finish | WARN |
+
+`Capture.TimedOut` is therefore kept separate from `Capture.Success`, and the
+cancelled statement's SQLSTATE is cleared rather than carried — leaving 57014 on
+it would report an outage as though a constraint had been violated.
+
+WARN, not FAIL, because FAIL asserts a defect nobody observed. WARN, not PASS,
+because a statement that never completed has not been shown to be safe — the
+same rule INV-CONFIDENCE-CAPPING states for weak facts, applied to an absent
+observation. A duration of "at least the ceiling" is precisely what the `outage`
+bucket means (INV-DURATIONS-BUCKETS).
+
+`cascade_delete_fanout` consequently still reports **WARN / RS-PERF-001**, in 98
+seconds instead of never: the expected verdict was preserved, not relaxed.
+
+## D-020 — D-010 resolved: `range` carries a confidence, and absence is not proof (PR-T7)
+
+D-010 recorded an open RFC-level question: `fixture.Range` had no confidence
+field, so a finding resting on the profiled extremes resolved to `absent` in the
+capping engine. The reasoning was that `absent` ranks below every named level and
+therefore "can never license a PASS", which made the omission look safe.
+
+**It was not safe, and the deep dive reproduced why.** The failure runs the
+OPPOSITE way to the one capping guards:
+
+- Capping caps findings that **exist**. Give it a weak fact and it downgrades the
+  verdict the finding argued for.
+- A sampled range makes a finding **fail to exist**. `pull` recorded
+  `customer_id` as `max: 59,773` from a `TABLESAMPLE` against a true maximum of
+  60,000; `ALTER TABLE ADD CONSTRAINT CHECK (customer_id <= 59900)` therefore
+  looked satisfiable, `checkConflict` emitted nothing, and the verdict was
+  **PASS with exit 0** — while the source database answered `check constraint
+  "orders_cust_max" of relation "orders" is violated by some row`.
+
+A missing finding is a PASS nothing downstream can reach. `absent` protected the
+verdict of a finding that was never made.
+
+**Decision, in two halves — both needed.**
+
+1. `Range` gains `confidence` (RFC §6.2): `exact` when min/max were read over the
+   whole column, `estimated` when sampled. `verdict.factConfidence` now resolves
+   `<table>.<col>.range` instead of returning `absent`. Small tables are already
+   read whole by `sampleClause`, so most fixtures get **exact** extremes for
+   free — the ones that do not are exactly the large tables where the
+   understatement bites.
+2. `RS-CONSTRAINT-010` reports the ABSENCE of a conflict when it rests on sampled
+   extremes: a WARN naming `pull --exact`. Half 1 alone would not have closed it,
+   because there is no finding for capping to act on.
+
+**No "far enough outside the range" escape.** A sample gives no bound on how far
+past its extremes the real data lies, so any threshold would be a guess dressed as
+one — the class of reasoning INV-CONFIDENCE-CAPPING exists to forbid. A sampled
+minimum can only be too high and a sampled maximum only too low, so every
+non-violating comparison against a sampled range is inconclusive. A fixture that
+wants a positive answer can have one for the cost of `pull --exact`.
+
+A fixture written before the field carries no confidence and is read as `absent`,
+not as `estimated` — the weakest reading for a fact whose provenance is unknown,
+and it deliberately does NOT trigger the new warning wholesale.
+
+## D-021 — The size budget was wrong, not the emitter (PR-T12)
+
+RFC §3.3 promised **"under 100KB for a 200-table schema."** A real
+`rowshape pull` of a 200-table schema is **246,129 bytes** — 2.4× over.
+
+The claim survived because the only thing guarding it was
+`TestEmitSizeUnder100KB`, which built its 200-table fixture **by hand** with
+facts deliberately "at estimated (bare)". It came in at 101,424 bytes against a
+102,400 limit — **976 bytes of headroom, under 1%** — and passed. That is the
+phase-dd pattern inside the test suite: a hand-authored fixture is
+self-consistent in ways a real one is not, so the guard defended a number no
+user would ever see. The margin was also so thin that any addition to the
+emitted vocabulary — several of which this phase makes — would have turned it red
+for reasons unrelated to the change.
+
+**Which to move?** Measured where the bytes actually go, over a real 200-table
+pull:
+
+| field | share |
+| --- | --- |
+| `range` | 16.1% |
+| `distinct` | 14.4% |
+| `unique` | 13.1% |
+| inline `confidence` | 11.5% |
+| constraints | 5.2% |
+| indexes | 4.5% |
+| `length` | 3.7% |
+| `format` | 2.5% |
+| `histogram` | 0% (none in this schema) |
+
+**No single field dominates and there is no fat.** Every one of the top four is
+load-bearing — `unique` and its confidence are the whole §7.2 story, `range` and
+`distinct` drive the findings. Slimming any of them costs information the format
+exists to carry, to defend a number that was never measured in the first place.
+
+**Decision: correct the claim.** §3.3 now says **under 320KB for a 200-table
+schema (~1.2KB/table)**, which is what the emitter costs with room for the
+vocabulary to grow. The principle it serves is untouched — 320KB of YAML is still
+a file a reviewer reads in a diff — and it is now a number derived from the
+artifact rather than asserted at it.
+
+**CONFIRMED by the owner.** The three `prd.json` statements that still asserted
+the old number — the phase-1 `ships` line, `P1-T6`'s acceptance criterion, and the
+`M1` milestone definition — were corrected too. They belonged to PASSED work, so
+leaving them would have meant a task marked green against a criterion the code
+does not meet, which is exactly the rot `D-017`/`D-018` were written to catch.
+Each now carries the corrected figure and points here.
+
+**And make the guard real.** `TestEmitSizeAgainstBudget` parses
+`testdata/real-pull.yaml`, the output of an actual `pull` against a 20-table
+schema shaped like §3.3's own description (a heavy tail of lookup tables plus a
+few wide ones), and asserts the **per-table** cost projected to 200 tables. Twenty
+tables so the testdata stays small; per-table because that is what drifts when the
+vocabulary grows. It also asserts a FLOOR, so the budget cannot be quietly
+satisfied by the emitter losing facts.
+
+`pull` now warns when what it just wrote is over budget and names what reduces it
+(`--schema`, or splitting the schema), and `rowshape inspect --size` reports any
+fixture against the budget.
+
+## D-022 — Supported PostgreSQL majors, and how the matrix moves (PR-T14)
+
+**Policy: rowshape supports every PostgreSQL major from 10 through the current
+release, and the corpus matrix runs all of them.**
+
+The matrix is not thoroughness for its own sake. Its whole purpose (D-006/D-007,
+`corpus.yml`'s own header) is that a rule right on one major can be wrong on
+another, and the catalog reads already branch on `serverMajor` at 12 and 15. A
+new major is exactly where those branches break — so the newest release anyone
+deploys is the worst one to have never run against.
+
+**PostgreSQL 18 is added to `corpus.yml`.** It was previously absent while being
+the current release: the matrix stopped at 17.
+
+**One 18-specific defect was found and fixed without an 18 server**, from the
+release's catalog changes rather than from a test run. PG 18 introduced
+**VIRTUAL** generated columns, which carry `attgenerated = 'v'`. Nothing matched
+`'v'`, so such a column fell through to the ordinary-column branch and its
+generation expression was recorded as a plain `DEFAULT` — which the target then
+emitted on an ordinary column, so an `UPDATE` production rejects would have
+succeeded there. A wrong verdict produced by a catalog value the code did not
+know existed.
+
+Virtual columns are now recorded as `generated: virtual` and deliberately **not
+reproduced**: the syntax exists only on 18+, so emitting it would make a fixture
+from an 18 source unhydratable on the 10–17 targets rowshape supports. The column
+is created ordinary and REPORTED, the same honest degradation a stored column
+with a withheld expression already gets.
+
+**When the next major ships**, add it to the matrix in the same commit that
+claims support, and expect the first run to surface something — that is the job.
+Behaviour that genuinely differs is captured as a per-major expected-verdict
+override with a comment naming the change, never by weakening the assertion.
+
+**Verification of 18 itself is delegated to CI, and that is a real gap until it
+runs.** This environment's network policy blocks `apt.postgresql.org`, so no 18
+server could be installed here and the corpus has NOT been observed green on 18
+locally. The matrix entry is what will observe it.
+
+## D-023 — RS-APPLY: a seventh finding namespace, and why it is not one of the six (PR-T9)
+
+INV-VERDICT-STABLE names six finding classes: `RS-LOCK`, `RS-DATA`,
+`RS-CONSTRAINT`, `RS-INDEX`, `RS-PERF`, `RS-REVERSE`. **This adds a seventh,
+`RS-APPLY`, and that is a deliberate extension of the public verdict contract.**
+
+**The gap.** A migration that failed to apply was floored to FAIL and produced NO
+finding. `--json` returned:
+
+```json
+{"verdict": "FAIL", "findings": null}
+```
+
+No code, no location, no remediation. The engine's own message — the only thing
+that says what went wrong — went to **stderr only**, which is nowhere in the
+machine-readable contract.
+
+That breaks the wedge directly rather than cosmetically. `rowshape mcp`'s
+`validate_migration` tool and the GitHub Action both render the Verdict struct
+**and nothing else**, so an agent was told FAIL and handed nothing to act on —
+which is exactly the hand-waving the P4-T8 agent-rule harness scores against.
+INV-VERDICT-STABLE also states that `remediation` is mandatory on every error, and
+this path had none. And it is the most common real failure there is: a migration
+with a typo.
+
+**Why a new namespace rather than reusing one.** The six existing classes all
+describe a HAZARD found in a migration that RAN — a lock it takes, data it will
+break on, an index it rebuilds. This one says the migration **did not run**.
+Folding it into `RS-DATA` would claim the data rejected a statement that may never
+have parsed; folding it into any other would be worse. The honest reading is that
+the six classify hazards and this classifies their absence.
+
+The extension is additive: existing codes keep their meaning, and consumers were
+always going to meet codes they had not seen. What INV-VERDICT-STABLE guarantees
+is that codes are **permanent** and **namespaced**, not that the namespace list is
+closed.
+
+**CONFIRMED by the owner.** `INV-VERDICT-STABLE` in `prd.json` now names seven
+namespaces and carries a `namespace_note` recording why the list grew, so the
+invariant no longer contradicts the code it governs.
+
+Landing it exposed how many places had their own copy of the list: the invariant,
+the `Finding` doc comment in `internal/verdict`, the registry, and
+`corpus/harness`'s `KnownCodes`. The one that was missed failed as `unknown
+finding code "RS-APPLY"` on a corpus case that was perfectly correct. `KnownCodes`
+is now DERIVED from the registry rather than hand-written — a list that must be
+updated in lockstep with another list is a list that will drift — which leaves the
+registry as the single source and the two prose statements as deliberate,
+reviewable restatements of it.
+
+The family also has a corpus case now (`rsapply-statement-rejected`, a `42P01`
+undefined table), so the newest namespace is not a documented hole in the
+credibility asset. It has no `resolve_contains` case deliberately: its remediation
+names no command to re-run, because nothing resolves a typo but fixing it.
+
+**Shape.** `RS-APPLY-001` carries the SQLSTATE and the engine's message in
+`evidence`, the file and line from the capture in `location` (so the Action's
+annotation step points at the offending line), and remediation that tells the
+reader how to interpret the SQLSTATE class — 23 means production-shaped DATA
+refused it, 42 means the statement does not match the schema.
+
+It declares **no `depends_on`**: it rests on what the database DID, not on a
+fixture fact. Declaring one would be false provenance in a DSSE-signed document —
+the mistake `RS-CONSTRAINT-010` made when it borrowed the row count's confidence.
+
+It lives in `internal/findings` as an ANALYZER rather than inside `validate`,
+because analyzers already receive the Capture and because `internal/findings`
+imports `internal/validate` — building it in `validate` would need the reverse and
+close an import cycle.
+
+**A cancelled statement is NOT an apply failure** (D-019): nothing rejected it, so
+reporting one would claim the database refused something it never got to judge.
+Pinned by a test.
+
+**RS-APPLY-001 is a FLOOR, not an addition.** When a specific analyzer already
+explains the same failure — `RS-DATA-001` saying the column contains NULLs, in the
+column's own terms, with remediation about the NULLs — the generic finding is
+dropped. Adding "read the SQLSTATE" alongside it is a second entry for one event
+that dilutes the actionable advice. Five corpus cases regressed exactly this way
+the moment the generic finding existed, which is how the rule was found.
+
+The suppression cannot live in an analyzer: analyzers run independently and none
+can see what the others produced. It happens where the whole finding set is known,
+in `BuildResult`. Only ERROR findings suppress it — a warning about a migration is
+not an explanation of why it was rejected, so a capture that failed with nothing
+but warnings still gets the generic account.
+
+Separately, `findings` now marshals as `[]` rather than `null` when empty. A JSON
+contract that yields null for "none" makes every reader write the same nil guard,
+and some of them forget.
+
+---
+
+## D-024 — RS-INDEX-002 belongs to the index build; RS-LOCK-002 is retired
+
+Two branches independently gave `RS-INDEX-002` different meanings, and the merge
+had to pick one. `main`'s meaning wins — **ADD PRIMARY KEY or UNIQUE builds an
+index under ACCESS EXCLUSIVE** — because it was already the published contract
+and because it covers strictly more: both `PRIMARY KEY` and `UNIQUE`, in both the
+bare and the `ADD CONSTRAINT <name>` spellings.
+
+The other branch's DROP INDEX finding is renumbered **`RS-INDEX-003`**. Finding
+codes are permanent (INV-VERDICT-STABLE), so this is a one-time reconciliation of
+two codes that were never both released, not a renumbering of a shipped code.
+
+**`RS-LOCK-002` is retired**, not renumbered. It reported the same hazard as
+`RS-INDEX-002` for `ADD PRIMARY KEY` alone, so keeping both would have filed two
+findings for one hazard on one statement. The hazard is an index build, which is
+where `RS-INDEX` says it lives.
+
+Its analyzer (`addPrimaryKeyFinding`) was already dead code — nothing dispatched
+it — which is how the duplication survived unnoticed.
+
+---
+
+## D-025 — A resolve command is only for a finding whose facts do not certify
+
+`ResolveCommand` is the "here is how to turn this WARN into a PASS" string. It now
+returns empty when the declared dependencies already certify.
+
+The capping path only ever called it after a downgrade, so the guard is a no-op
+there. The MCP surface asks for one on **every** finding, and without the guard an
+`RS-INDEX-002` resting on an exact row count told the agent to `pull --exact` to
+raise a fact that was already exact — a full production re-pull that would change
+nothing, delivered to the surface the agent loop is built on.
+
+Being wrong here is worse than being silent: the loop's whole premise is that an
+agent can act on what rowshape says.
+
+---
+
+## D-026 — RS-PERF-010 must recognize the batching it prescribes
+
+`RS-PERF-010`'s remediation says to loop over a bounded key range. It then flagged
+the batched form exactly as loudly as the unbatched one, because it sized every
+qualified UPDATE/DELETE against the table.
+
+A WARN that survives the remediation is not a warning, it is a dead end — the
+failure class phase-cr5 exists to close. It teaches a human to ignore the rule,
+and it leaves an agent with no move that reaches PASS, so it either gives up or
+hand-waves the verdict.
+
+The rule now recognizes a window bounded on **both** sides of one column
+(`BETWEEN`, or a `>`/`>=` and a `<`/`<=` on the same column):
+
+- **Literal bounds** are decided on the window, not the table. A window at or
+  above the threshold is still reported — batching is not a magic word, it is a
+  small window.
+- **One-sided bounds are not batching.** `WHERE id >= 1000` is the whole table
+  minus a prefix, and reading it as batched would fail open on the exact statement
+  this rule exists to catch. An `OR` anywhere disqualifies the clause for the same
+  reason.
+- **Placeholder or expression bounds** (`$1`, `:lo`, `lo + batch`) are silent. The
+  window size is a run-time choice that is not in the SQL, so the alternative
+  claim — "this may rewrite the whole table" — is simply false for a batch loop.
+  rowshape cannot verify the caller keeps the window small; no static check can.
+
+---
+
+## D-027 — rowshape cannot validate a per-batch COMMIT
+
+Found while making the launch-gate demo follow its own remediation.
+
+`validate` applies a migration set inside one transaction. A `COMMIT` between
+batches — the half of batching that actually releases locks — is therefore
+rejected outright, as SQLSTATE `2D000` (invalid transaction termination), whether
+it appears in a `DO` block or in a procedure reached by `CALL`. A top-level
+`COMMIT` between statements works, but no plain-SQL construct loops across one.
+
+So the committing form of the very pattern `RS-PERF-010` prescribes is not
+something rowshape can certify today. The demo bounds each batch and says plainly
+that the commit belongs in a task run outside the migration; it does not pretend
+the wrapped form is equivalent.
+
+A second consequence: a `DO` block is **one statement** to the server, so every
+batch it runs is charged to the same `--statement-timeout`. The demo's 5,000,000
+row backfill takes about 90s, which the 1m default cancels — flooring the verdict
+to WARN with no findings (D-019) and reading as the demo breaking when nothing
+about the migration is wrong.

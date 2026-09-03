@@ -114,7 +114,34 @@ func checkConflict(f *fixture.Fixture, table, expr string) (verdict.Finding, boo
 	case "<=":
 		violated = hiOK && hi > k
 	}
+
+	dep := table + "." + col + ".range"
 	if !violated {
+		// NOT violated according to the recorded extremes — but if those extremes came
+		// from a SAMPLE they understate the real spread, so "no conflict" may simply be
+		// the sample not having seen the offending row.
+		//
+		// This is the case ordinary capping cannot reach. Capping caps findings that
+		// EXIST; here the weak fact makes the finding NOT EXIST, and a missing finding
+		// is a PASS nothing downstream can touch. It was reproduced: a column whose
+		// true maximum was 60,000 was recorded from a TABLESAMPLE as 59,773, so
+		// `CHECK (customer_id <= 59900)` looked satisfiable, no finding was emitted,
+		// and the verdict was PASS — while the source database refused the statement
+		// outright. So the ABSENCE of a conflict has to be reported when it rests on
+		// sampled extremes.
+		if near, ok := sampledBoundInconclusive(c.Range, op, lo, loOK, hi, hiOK); ok {
+			return verdict.Finding{
+				Code:     "RS-CONSTRAINT-010",
+				Severity: verdict.SeverityWarn,
+				Title:    fmt.Sprintf("CHECK (%s %s %s) on %s.%s cannot be confirmed from a sampled range", col, op, trimNum(k), shortTable(table), col),
+				Detail: fmt.Sprintf("The column's range [%s, %s] was profiled from a SAMPLE, so it is a lower bound on the real spread, and the bound %s sits %s. Existing rows may already violate the constraint even though the recorded extremes do not. Re-profile with `rowshape pull --exact` to read the true extremes.",
+					trimNum(lo), trimNum(hi), trimNum(k), near),
+				Evidence:    map[string]any{"range_min": c.Range.Min, "range_max": c.Range.Max, "range_confidence": string(c.Range.Confidence), "check": expr},
+				DependsOn:   []string{dep},
+				Remediation: remediation("RS-CONSTRAINT-010"),
+				Explain:     "rowshape explain RS-CONSTRAINT-010",
+			}, true
+		}
 		return verdict.Finding{}, false
 	}
 	return verdict.Finding{
@@ -128,17 +155,51 @@ func checkConflict(f *fixture.Fixture, table, expr string) (verdict.Finding, boo
 		// reads — false provenance in a DSSE-signed document, and it borrowed
 		// that fact's confidence for a claim it does not support.
 		//
-		// `range` has no case in verdict.factConfidence, so this path resolves to
-		// `absent` — which is the honest answer, because fixture.Range carries no
-		// confidence field at all (RFC §6.1: Min/Max/Mean only). Absent ranks
-		// below every named level, so it can never license a PASS. It does not
-		// weaken THIS finding: it is severity error → want FAIL, and Cap leaves
-		// FAIL untouched. Whether Range should carry a confidence is an RFC-level
-		// question, recorded as D-010 rather than patched in the engine.
-		DependsOn:   []string{table + "." + col + ".range"},
+		// `range` now HAS a case in verdict.factConfidence (§6.1 gained a
+		// confidence — D-010 resolved), so this dependency resolves to `exact` for
+		// extremes read over the whole column and `estimated` for sampled ones. It
+		// does not weaken THIS finding: severity error → want FAIL, and Cap leaves
+		// FAIL untouched. It is the WARN branch above, for the absence of a
+		// conflict, that the confidence actually decides.
+		DependsOn:   []string{dep},
 		Remediation: remediation("RS-CONSTRAINT-010"),
 		Explain:     "rowshape explain RS-CONSTRAINT-010",
 	}, true
+}
+
+// sampledBoundInconclusive reports whether "no conflict" is a conclusion the
+// recorded extremes cannot support, and describes which extreme it turned on.
+//
+// It fires whenever the extremes came from a SAMPLE and the comparison did not
+// already find a violation, because in that situation the sample can always be
+// the reason. The direction is one-way in both cases and always toward doubt:
+//
+//   - a sampled MINIMUM can only be too HIGH, so `col >= k` that looks satisfiable
+//     may be violated by a lower row the sample never saw;
+//   - a sampled MAXIMUM can only be too LOW, so `col <= k` that looks satisfiable
+//     may be violated by a higher one.
+//
+// There is deliberately no "comfortably outside the range so it must be fine"
+// escape. A sample gives no bound on how far past its extremes the real data goes,
+// so any such rule would be a guess dressed as a threshold — and this is precisely
+// the class of reasoning INV-CONFIDENCE-CAPPING exists to forbid. A fixture that
+// wants a positive answer here can have one for the cost of `pull --exact`.
+func sampledBoundInconclusive(rng *fixture.Range, op string, lo float64, loOK bool, hi float64, hiOK bool) (string, bool) {
+	// An exact range is a real answer in both directions; only a sample understates.
+	if rng == nil || rng.Confidence != fixture.Estimated {
+		return "", false
+	}
+	switch op {
+	case ">", ">=":
+		if loOK {
+			return fmt.Sprintf("below the sampled minimum %s, which a sample can only overstate", trimNum(lo)), true
+		}
+	case "<", "<=":
+		if hiOK {
+			return fmt.Sprintf("above the sampled maximum %s, which a sample can only understate", trimNum(hi)), true
+		}
+	}
+	return "", false
 }
 
 // parseAddConstraint recognizes ALTER TABLE ... ADD CONSTRAINT <name> <kind> ...

@@ -41,9 +41,12 @@ func (r *reader) profileTable(ctx context.Context, t tableRef, tbl *fixture.Tabl
 
 	// In exact mode every stat is computed over the whole table; otherwise large
 	// tables are sampled deterministically.
-	from, _ := sampleClause(t.schema, t.name, t.reltuples)
+	from, sampled := sampleClause(t.schema, t.name, t.reltuples)
 	if r.exact {
 		from = pgx.Identifier{t.schema, t.name}.Sanitize()
+		// Exact mode reads the whole column, so the extremes are the true extremes —
+		// the sampling verdict from sampleClause no longer applies.
+		sampled = false
 
 		// Exact mode scans the whole table anyway, so count it and record the row
 		// count at `exact` instead of leaving the planner's estimate in place
@@ -63,7 +66,11 @@ func (r *reader) profileTable(ctx context.Context, t tableRef, tbl *fixture.Tabl
 	}
 
 	for name, col := range tbl.Columns {
-		category := categorize(col.Type)
+		// profileType, not col.Type: a domain must be profiled as its base type, or a
+		// domain over integer is treated as text and loses its range and histogram.
+		// The fixture still RECORDS the domain name — that is the column's real type;
+		// only the profiling decision follows the base.
+		category := categorize(r.profileType(col.Type))
 
 		// Exact mode: null counts are exact and distinct is measured via a full
 		// HLL pass. Fast mode: both come from the planner's stats (estimated).
@@ -91,24 +98,35 @@ func (r *reader) profileTable(ctx context.Context, t tableRef, tbl *fixture.Tabl
 		case "numeric", "temporal":
 			// Numeric/temporal columns may carry a range (§6.2). Text and bytea
 			// MUST NOT (§6.1) — that is why range is only reached here.
-			rng, err := r.rangeStat(ctx, from, name, category)
-			if err != nil {
+			var rng *fixture.Range
+			err := r.guarded(ctx, "range", func() (e error) {
+				rng, e = r.rangeStat(ctx, from, name, category, r.profileType(col.Type), sampled)
+				return
+			})
+			if degraded, err := r.degrade(t.qualified, name, "range", err); err != nil {
 				return err
+			} else if !degraded {
+				col.Range = rng
 			}
-			col.Range = rng
 			// A skewed numeric column also earns a histogram — the only field that
 			// captures skew (§6.2). Privacy-gated at standard+ (§8.2).
 			if category == "numeric" {
-				hist, err := r.measureHistogram(ctx, from, name)
-				if err != nil {
+				var hist *fixture.Histogram
+				err := r.guarded(ctx, "hist", func() (e error) { hist, e = r.measureHistogram(ctx, from, name, r.profileType(col.Type)); return })
+				if degraded, err := r.degrade(t.qualified, name, "histogram", err); err != nil {
 					return err
+				} else if !degraded {
+					col.Histogram = hist
 				}
-				col.Histogram = hist
 			}
 		case "text":
-			samples, err := r.valueSample(ctx, from, name)
-			if err != nil {
-				return err
+			var samples []string
+			err := r.guarded(ctx, "sample", func() (e error) { samples, e = r.valueSample(ctx, from, name); return })
+			if degraded, derr := r.degrade(t.qualified, name, "length/format", err); derr != nil {
+				return derr
+			} else if degraded {
+				tbl.Columns[name] = col
+				continue
 			}
 			col.Length = lengthStatsFromStrings(samples)
 			d, known := distinctValue(col.Distinct)
@@ -123,15 +141,22 @@ func (r *reader) profileTable(ctx context.Context, t tableRef, tbl *fixture.Tabl
 		case "bytea":
 			// bytea gets length stats only, never a range (§6.1). opaque is the
 			// honest format for opaque bytes.
-			col.Length, err = r.byteaLengthStat(ctx, from, name)
-			if err != nil {
-				return err
+			var length *fixture.Length
+			err := r.guarded(ctx, "bytea", func() (e error) { length, e = r.byteaLengthStat(ctx, from, name); return })
+			if degraded, derr := r.degrade(t.qualified, name, "length", err); derr != nil {
+				return derr
+			} else if !degraded {
+				col.Length = length
 			}
 			col.Format = fmtOpaque
 		case "json":
-			samples, err := r.valueSample(ctx, from, name)
-			if err != nil {
-				return err
+			var samples []string
+			err := r.guarded(ctx, "json", func() (e error) { samples, e = r.valueSample(ctx, from, name); return })
+			if degraded, derr := r.degrade(t.qualified, name, "json shape", err); derr != nil {
+				return derr
+			} else if degraded {
+				tbl.Columns[name] = col
+				continue
 			}
 			col.Format = fmtJSONBShape
 			if strings.EqualFold(col.Type, "json") {
@@ -149,11 +174,13 @@ func (r *reader) profileTable(ctx context.Context, t tableRef, tbl *fixture.Tabl
 			// the first duplicate, so a non-unique column is cheap; only a genuinely
 			// unique column pays for a full scan.
 			if col.Unique == nil {
-				uf, err := r.probeUniqueExistence(ctx, t.schema, t.name, name)
-				if err != nil {
-					return err
+				var uf *fixture.Fact[bool]
+				err := r.guarded(ctx, "uniq", func() (e error) { uf, e = r.probeUniqueExistence(ctx, t.schema, t.name, name); return })
+				if degraded, derr := r.degrade(t.qualified, name, "unique", err); derr != nil {
+					return derr
+				} else if !degraded {
+					col.Unique = uf
 				}
-				col.Unique = uf
 			}
 		case shouldEscalate(col, rows):
 			// Fast/targeted mode: auto-escalate a dangerous column — looks unique but
@@ -163,10 +190,12 @@ func (r *reader) profileTable(ctx context.Context, t tableRef, tbl *fixture.Tabl
 				r.warnf("skipped uniqueness escalation on %s.%s: table has ~%d rows, over the --max-escalation-rows cap of %d; leaving `unique` unproven (omitted) rather than full-scanning",
 					t.qualified, name, rows, r.maxEscalationRows)
 			} else {
-				if err := r.escalateColumn(ctx, t.schema, t.name, name, &col); err != nil {
-					return err
+				err := r.guarded(ctx, "escal", func() error { return r.escalateColumn(ctx, t.schema, t.name, name, &col) })
+				if degraded, derr := r.degrade(t.qualified, name, "uniqueness escalation", err); derr != nil {
+					return derr
+				} else if !degraded {
+					r.escalated = append(r.escalated, t.qualified+"."+name)
 				}
-				r.escalated = append(r.escalated, t.qualified+"."+name)
 			}
 		}
 
@@ -176,8 +205,11 @@ func (r *reader) profileTable(ctx context.Context, t tableRef, tbl *fixture.Tabl
 	// Measure the fan-out distribution and orphan_fraction for every FK — the
 	// moat fields that must be aggregated over data, not read from the catalog
 	// (RFC §6.6, P1-T11).
-	if err := r.measureReferences(ctx, t, tbl); err != nil {
-		return err
+	err = r.guarded(ctx, "refs", func() error { return r.measureReferences(ctx, t, tbl) })
+	if degraded, derr := r.degrade(t.qualified, "references", "fanout/orphan_fraction", err); derr != nil {
+		return derr
+	} else if degraded {
+		return nil
 	}
 
 	// A partitioned parent declares its partition shape (RFC §14.2, P1-T12), and
@@ -193,6 +225,17 @@ func (r *reader) profileTable(ctx context.Context, t tableRef, tbl *fixture.Tabl
 			return err
 		}
 		tbl.Rows = fixture.Fact[int64]{Value: total, Confidence: fixture.Estimated}
+
+		// And its BYTES come from the partitions too, for exactly the same reason the
+		// rows do. pg_total_relation_size on the parent measures the parent's own
+		// storage, which is zero — so a 400GB partitioned table reported `bytes: 0` and
+		// every size-driven duration bucket for it extrapolated from nothing,
+		// understating precisely the migrations whose cost matters most.
+		bytes, err := r.partitionTotalBytes(ctx, t.oid)
+		if err != nil {
+			return err
+		}
+		tbl.Bytes = bytes
 	}
 	return nil
 }
@@ -224,12 +267,40 @@ func (r *reader) columnStats(ctx context.Context, schema, table string) (map[str
 	return out, rows.Err()
 }
 
+// numericCast renders the expression that reads a numeric-category column as a
+// double precision, which the range aggregate needs.
+//
+// `money` is the exception that makes this a function. Postgres refuses to cast it
+// directly:
+//
+//	ERROR: cannot cast type money to double precision (SQLSTATE 42846)
+//
+// so profiling a table with a money column aborted the whole pull with a tool
+// error — every schema that prices anything in `money`. Routing through numeric,
+// which money DOES cast to, is the documented path. Only money takes the detour:
+// float8 does not round-trip through numeric for infinities on older majors, so
+// applying it to everything would trade this bug for a subtler one.
+func numericCast(col, typ string) string {
+	if strings.EqualFold(strings.TrimSpace(typ), "money") {
+		return fmt.Sprintf("(%s)::numeric::double precision", col)
+	}
+	return fmt.Sprintf("(%s)::double precision", col)
+}
+
 // rangeStat computes min/max (and, for numeric, mean) over the sample. All are
 // read as aggregates — no row values enter the profiler (INV-NO-ROWS).
-func (r *reader) rangeStat(ctx context.Context, from, col, category string) (*fixture.Range, error) {
+//
+// `sampled` says whether `from` is a TABLESAMPLE rather than the whole table, and
+// it is recorded on the Range because it changes what the extremes MEAN. A sampled
+// min/max is a lower bound on the true spread, not the spread: on a 60,000-row
+// column whose true maximum was 60,000, the sample returned 59,773. A finding that
+// keys off the extremes then fails to fire, and a missing finding is a PASS
+// nothing downstream can cap.
+func (r *reader) rangeStat(ctx context.Context, from, col, category, typ string, sampled bool) (*fixture.Range, error) {
 	c := pgx.Identifier{col}.Sanitize()
 	if category == "numeric" {
-		q := fmt.Sprintf(`SELECT min((%s)::double precision), max((%s)::double precision), avg((%s)::double precision) FROM %s`, c, c, c, from)
+		num := numericCast(c, typ)
+		q := fmt.Sprintf(`SELECT min(%s), max(%s), avg(%s) FROM %s`, num, num, num, from)
 		var lo, hi, mean *float64
 		if err := r.tx.QueryRow(ctx, q).Scan(&lo, &hi, &mean); err != nil {
 			return nil, err
@@ -237,7 +308,7 @@ func (r *reader) rangeStat(ctx context.Context, from, col, category string) (*fi
 		if lo == nil && hi == nil {
 			return nil, nil
 		}
-		rng := &fixture.Range{}
+		rng := &fixture.Range{Confidence: rangeConfidence(sampled)}
 		if mean != nil {
 			m := round6(*mean)
 			rng.Mean = &m
@@ -259,7 +330,7 @@ func (r *reader) rangeStat(ctx context.Context, from, col, category string) (*fi
 	if lo == nil && hi == nil {
 		return nil, nil
 	}
-	rng := &fixture.Range{}
+	rng := &fixture.Range{Confidence: rangeConfidence(sampled)}
 	if lo != nil {
 		rng.Min = lo.UTC().Format(time.RFC3339)
 	}
@@ -267,6 +338,21 @@ func (r *reader) rangeStat(ctx context.Context, from, col, category string) (*fi
 		rng.Max = hi.UTC().Format(time.RFC3339)
 	}
 	return rng, nil
+}
+
+// rangeConfidence is exact for extremes read over the whole column and estimated
+// for extremes read from a sample.
+//
+// `exact` is the right word for a full pass even in fast mode: min and max are
+// aggregates, so reading the whole column gives the true extremes, not an
+// approximation of them. Small tables are read whole by sampleClause, so most
+// fixtures get exact extremes for free — and the ones that do not are exactly the
+// large tables where the understatement bites.
+func rangeConfidence(sampled bool) fixture.Confidence {
+	if sampled {
+		return fixture.Estimated
+	}
+	return fixture.Exact
 }
 
 // byteaLengthStat computes octet-length statistics for a bytea column. Only

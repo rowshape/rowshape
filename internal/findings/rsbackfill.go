@@ -2,6 +2,7 @@ package findings
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/rowshape/rowshape/internal/fixture"
@@ -103,6 +104,34 @@ func backfillFinding(f *fixture.Fixture, clean, upper, verb string) (verdict.Fin
 	// possible false positive: it fires on the most ordinary statement there is.
 	if matchesUniqueEquality(tbl, clean, upper) {
 		return verdict.Finding{}, false
+	}
+
+	// A BOUNDED KEY RANGE is what batching looks like, and it has to be
+	// recognized here or this rule dead-ends its own remediation: RS-PERF-010
+	// tells the reader to "loop over a bounded key range — UPDATE ... WHERE id
+	// BETWEEN :lo AND :hi", and without this the rewritten statement warns
+	// exactly as loudly as the unbatched one it replaced. A WARN that persists
+	// after the reader does the recommended thing teaches them to ignore it, and
+	// for an agent it is worse than noise: the loop cannot close, so it either
+	// gives up or hand-waves the verdict.
+	if bounded, span, known := boundedRange(tbl, clean, upper); bounded {
+		// Literal bounds: the window is computable, so decide on it rather than on
+		// the table. A window at or above the threshold is still a mass write and
+		// still reported — batching is not a magic word, it is a small window.
+		if known && span < backfillThreshold {
+			return verdict.Finding{}, false
+		}
+		if !known {
+			// Placeholder or expression bounds ($1, :lo, a subquery). The window
+			// size is chosen by the caller at run time and is not in the SQL, so
+			// the honest reading is that this statement is windowed — NOT that it
+			// may rewrite the whole table, which is the claim the finding below
+			// would make and which is false for a batch loop. rowshape cannot
+			// verify the caller keeps the window small; no static check can, and
+			// declining to certify the whole table on a statement that plainly
+			// cannot touch it would be the same over-reach in the other direction.
+			return verdict.Finding{}, false
+		}
 	}
 
 	affected, conf, explained := estimateAffected(tbl, clean, upper, rows)
@@ -246,4 +275,186 @@ func matchesUniqueEquality(tbl fixture.Table, clean, upper string) bool {
 		return false
 	}
 	return c.Unique.Value && c.Unique.Confidence == fixture.Exact
+}
+
+// boundedRange reports whether the WHERE clause confines the statement to a
+// bounded window on a single column — the shape of a batched backfill.
+//
+// It recognizes `col BETWEEN a AND b` and a conjunction giving the SAME column
+// both a lower bound (> or >=) and an upper bound (< or <=). ONE-SIDED bounds are
+// deliberately not enough: `WHERE id >= 1000` matches everything above the
+// bound, which is the whole table minus a prefix, and reading that as batched
+// would fail open on the exact statement this rule exists to catch.
+//
+// span is the number of key values the window covers, and known says whether it
+// could be computed at all: literal bounds give a number, while `$1` / `:lo` /
+// an expression give a window whose size lives outside the SQL.
+//
+// An OR anywhere disqualifies the clause: it can widen the window back out, and
+// a bound that holds for one branch says nothing about the other.
+func boundedRange(tbl fixture.Table, clean, upper string) (bounded bool, span int64, known bool) {
+	i := strings.Index(upper, "WHERE")
+	if i < 0 {
+		return false, 0, false
+	}
+	cond := strings.TrimSpace(strings.Trim(strings.TrimSpace(clean[i+len("WHERE"):]), ";"))
+	if strings.Contains(strings.ToUpper(cond), " OR ") {
+		return false, 0, false
+	}
+
+	type bound struct {
+		lo, hi         string
+		loOpen, hiOpen bool // a strict > or <, which excludes the endpoint
+		haveLo, haveHi bool
+	}
+	bounds := map[string]*bound{}
+	get := func(col string) *bound {
+		col = normalizeColumn(col)
+		if col == "" {
+			return nil
+		}
+		if _, ok := tbl.Columns[col]; !ok {
+			return nil
+		}
+		if bounds[col] == nil {
+			bounds[col] = &bound{}
+		}
+		return bounds[col]
+	}
+
+	for _, conj := range splitConjuncts(cond) {
+		cu := strings.ToUpper(conj)
+		if j := strings.Index(cu, " BETWEEN "); j > 0 {
+			b := get(conj[:j])
+			if b == nil {
+				continue
+			}
+			rest := conj[j+len(" BETWEEN "):]
+			ru := strings.ToUpper(rest)
+			k := strings.Index(ru, " AND ")
+			if k < 0 {
+				continue
+			}
+			b.lo, b.hi = strings.TrimSpace(rest[:k]), strings.TrimSpace(rest[k+len(" AND "):])
+			b.haveLo, b.haveHi = true, true
+			b.loOpen, b.hiOpen = false, false // BETWEEN is inclusive at both ends
+			continue
+		}
+		col, op, val, ok := comparison(conj)
+		if !ok {
+			continue
+		}
+		b := get(col)
+		if b == nil {
+			continue
+		}
+		switch op {
+		case ">", ">=":
+			b.lo, b.haveLo, b.loOpen = val, true, op == ">"
+		case "<", "<=":
+			b.hi, b.haveHi, b.hiOpen = val, true, op == "<"
+		}
+	}
+
+	for _, b := range bounds {
+		if !b.haveLo || !b.haveHi {
+			continue
+		}
+		lo, loOK := literalInt(b.lo)
+		hi, hiOK := literalInt(b.hi)
+		if loOK && hiOK {
+			if b.loOpen {
+				lo++
+			}
+			if b.hiOpen {
+				hi--
+			}
+			if hi < lo {
+				return true, 0, true
+			}
+			return true, hi - lo + 1, true
+		}
+		return true, 0, false
+	}
+	return false, 0, false
+}
+
+// splitConjuncts splits a WHERE clause on top-level AND, ignoring one inside
+// parentheses or a quoted string.
+func splitConjuncts(cond string) []string {
+	var out []string
+	depth, start, inStr := 0, 0, false
+	betweenClosed := map[int]bool{}
+	up := strings.ToUpper(cond)
+	for i := 0; i < len(cond); i++ {
+		switch {
+		case cond[i] == '\'':
+			inStr = !inStr
+		case inStr:
+		case cond[i] == '(':
+			depth++
+		case cond[i] == ')':
+			depth--
+		case depth == 0 && strings.HasPrefix(up[i:], " AND "):
+			// `x BETWEEN a AND b` spends an AND of its own. The first AND after an
+			// unclosed BETWEEN belongs to it, not to the conjunction — splitting
+			// there tore the window in half and left both sides one-sided, so a
+			// batched statement read as unbounded.
+			if strings.Contains(up[start:i], " BETWEEN ") && !betweenClosed[start] {
+				betweenClosed[start] = true
+				i += len(" AND ") - 1
+				continue
+			}
+			out = append(out, strings.TrimSpace(cond[start:i]))
+			i += len(" AND ") - 1
+			start = i + 1
+		}
+	}
+	return append(out, strings.TrimSpace(cond[start:]))
+}
+
+// comparison splits `<col> <op> <value>` for the four range operators.
+func comparison(conj string) (col, op, val string, ok bool) {
+	for _, o := range []string{">=", "<=", ">", "<"} {
+		if i := strings.Index(conj, o); i > 0 {
+			// Exclude <> and >= / <= when scanning for the single-character forms.
+			if o == ">" && (conj[i+1] == '=' || conj[i-1] == '<') {
+				continue
+			}
+			if o == "<" && (conj[i+1] == '=' || conj[i+1] == '>') {
+				continue
+			}
+			return strings.TrimSpace(conj[:i]), o, strings.TrimSpace(conj[i+len(o):]), true
+		}
+	}
+	return "", "", "", false
+}
+
+// normalizeColumn strips quoting and a table qualifier from a column reference.
+func normalizeColumn(raw string) string {
+	c := strings.TrimSpace(raw)
+	if i := strings.LastIndex(c, "."); i >= 0 {
+		c = c[i+1:]
+	}
+	c = strings.Trim(strings.TrimSpace(c), `"`)
+	if c == "" || strings.ContainsAny(c, " (),") {
+		return ""
+	}
+	return c
+}
+
+// literalInt reads an integer literal bound, with an optional cast stripped.
+// A placeholder ($1, :lo, ?) or an expression yields ok=false, which is the
+// "windowed but unsized" case boundedRange reports.
+func literalInt(v string) (int64, bool) {
+	t := strings.TrimSpace(v)
+	if i := strings.Index(t, "::"); i > 0 {
+		t = strings.TrimSpace(t[:i])
+	}
+	t = strings.Trim(t, "'")
+	n, err := strconv.ParseInt(t, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }

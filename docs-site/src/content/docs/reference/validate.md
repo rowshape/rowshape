@@ -30,6 +30,7 @@ rowshape validate [rowshape.yaml] [flags]
 | `--runner` | — | override runner detection (rawsql; alembic\|prisma\|drizzle are DETECTED but cannot be validated yet) |
 | `--scale` | `1` | fraction of declared rows to hydrate |
 | `--seed` | `0` | deterministic hydration seed |
+| `--statement-timeout` | `1m0s` | cancel a migration statement that runs longer than this (0 = no ceiling); a cancelled statement is reported, never certified |
 | `--target` | — | validate against this live database URL (its data is ground truth) |
 | `--warn-fail` | — | exit non-zero on a WARN-only verdict |
 

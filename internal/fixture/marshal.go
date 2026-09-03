@@ -72,6 +72,12 @@ func (r Range) MarshalYAML() (any, error) {
 	if err := appendOptFloat(n, "mean", r.Mean); err != nil {
 		return nil, err
 	}
+	// The confidence of the EXTREMES. Dropped here it is silently lost, and a
+	// consumer cannot tell a sampled range from an exact one — which is the whole
+	// difference between a finding that can be trusted and one that cannot fire.
+	if r.Confidence != "" {
+		appendScalar(n, "confidence", string(r.Confidence))
+	}
 	return n, nil
 }
 
@@ -143,6 +149,11 @@ func (t Table) MarshalYAML() (any, error) {
 			return nil, err
 		}
 		appendScalar(pn, "strategy", t.Partitions.Strategy)
+		// The key is what lets a partitioned table be REBUILT rather than merely
+		// described; dropped here it is silently lost, whatever the struct tag says.
+		if t.Partitions.Key != "" {
+			appendScalar(pn, "key", t.Partitions.Key)
+		}
 		if t.Partitions.Skew != 0 {
 			if err := appendField(pn, "skew", t.Partitions.Skew); err != nil {
 				return nil, err
@@ -199,6 +210,18 @@ func (c Column) MarshalYAML() (any, error) {
 	}
 	if c.Generated != "" {
 		appendScalar(n, "generated", c.Generated)
+	}
+	// Both must be emitted or the target rebuilds a generated column as an ordinary
+	// one and accepts writes production rejects — this marshaller names every field
+	// explicitly, so a field absent here is silently dropped.
+	if c.Identity != "" {
+		appendScalar(n, "identity", c.Identity)
+	}
+	if c.GeneratedExpression != "" {
+		appendScalar(n, "generated_expression", c.GeneratedExpression)
+	}
+	if c.Default != "" {
+		appendScalar(n, "default", c.Default)
 	}
 	if c.Format != "" {
 		appendScalar(n, "format", c.Format)
@@ -289,6 +312,22 @@ func (i Index) MarshalYAML() (any, error) {
 			return nil, err
 		}
 	}
+	// Keys must be emitted or an expression index survives the catalog read only to
+	// be lost on the way to disk — this marshaller names every field explicitly, so a
+	// field absent here is silently dropped no matter what the struct tag says.
+	if len(i.Keys) > 0 {
+		if err := appendField(n, "keys", i.Keys); err != nil {
+			return nil, err
+		}
+	}
+	// Include is payload, not key — and it has to survive for the same reason Keys
+	// does: dropped here, a covering UNIQUE index reaches the disposable database
+	// with its payload folded into the key, enforcing strictly less than production.
+	if len(i.Include) > 0 {
+		if err := appendField(n, "include", i.Include); err != nil {
+			return nil, err
+		}
+	}
 	if i.Unique {
 		if err := appendField(n, "unique", i.Unique); err != nil {
 			return nil, err
@@ -318,8 +357,23 @@ func (r Reference) MarshalYAML() (any, error) {
 	n := &yaml.Node{Kind: yaml.MappingNode, Style: yaml.FlowStyle}
 	appendScalar(n, "column", r.Column)
 	appendScalar(n, "to", r.To)
+	// Name groups the per-column entries of a composite foreign key back into one
+	// constraint. Dropped here, a consumer rebuilds two independent single-column
+	// keys instead — this marshaller names every field explicitly, so a field absent
+	// here is silently lost no matter what the struct tag says.
+	if r.Name != "" {
+		appendScalar(n, "name", r.Name)
+	}
 	if r.OnDelete != "" {
 		appendScalar(n, "on_delete", r.OnDelete)
+	}
+	if r.OnUpdate != "" {
+		appendScalar(n, "on_update", r.OnUpdate)
+	}
+	if r.Validated != nil {
+		if err := appendField(n, "validated", *r.Validated); err != nil {
+			return nil, err
+		}
 	}
 	if r.Fanout != nil {
 		fn, err := r.Fanout.MarshalYAML()

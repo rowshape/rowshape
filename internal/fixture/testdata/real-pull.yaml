@@ -1,0 +1,244 @@
+rowshape_fixture: "1"
+meta:
+  id: fixture@2026-07-30
+  generated_at: "2026-07-30T12:55:04Z"
+  generator: rowshape/dev
+  engine: {name: postgres, version: 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)}
+  privacy: standard
+  source: sha256:12d9828516266a61bf485c874e000b15ee0f3eb4614aca94939455830dc913a8
+  profile:
+    mode: targeted
+    scanned_at: "2026-07-30T12:55:04Z"
+    escalated:
+      - public.lookup1.name
+      - public.lookup10.name
+      - public.lookup11.name
+      - public.lookup12.name
+      - public.lookup13.name
+      - public.lookup14.name
+      - public.lookup2.name
+      - public.lookup3.name
+      - public.lookup4.name
+      - public.lookup5.name
+      - public.lookup6.name
+      - public.lookup7.name
+      - public.lookup8.name
+      - public.lookup9.name
+      - public.wide1.amount
+      - public.wide1.name
+      - public.wide2.amount
+      - public.wide2.name
+      - public.wide3.amount
+      - public.wide3.name
+      - public.wide4.amount
+      - public.wide4.name
+      - public.wide5.amount
+      - public.wide5.name
+      - public.wide6.amount
+      - public.wide6.name
+  digest: sha256:241d8edb04354b763c970416f3c1ae0e54fed75ca37f182f23dcdccf3bf78cc3
+tables:
+  public.lookup1:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup1_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup1_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup2:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup2_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup2_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup3:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup3_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup3_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup4:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup4_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup4_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup5:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup5_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup5_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup6:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup6_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup6_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup7:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup7_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup7_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup8:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup8_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup8_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup9:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup9_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup9_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup10:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup10_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup10_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup11:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup11_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup11_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup12:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup12_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup12_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup13:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup13_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup13_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.lookup14:
+    rows: 200
+    bytes: 65536
+    columns:
+      created_at: {type: timestamp with time zone, nullable: true, null_fraction: 0, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: integer, nullable: false, distinct: 200, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 200, mean: 100.5, confidence: exact}}
+      name: {type: text, nullable: false, distinct: {value: 199, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 2, max: 4, mean: 3.46, p95: 4}}
+    constraints: [{name: lookup14_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: lookup14_pkey, method: btree, columns: [id], unique: true, bytes: 16384}]
+  public.wide1:
+    rows: 5000
+    bytes: 614400
+    columns:
+      amount: {type: 'numeric(12,2)', nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      created_at: {type: timestamp with time zone, nullable: false, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: bigint, nullable: false, distinct: 5000, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      name: {type: text, nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 3, max: 5, mean: 4.784, p95: 5}}
+      owner_id: {type: bigint, nullable: false, distinct: 500, range: {min: 0, max: 499, mean: 249.5, confidence: exact}}
+      payload: {type: jsonb, nullable: true, null_fraction: 0, distinct: 1, format: jsonb_shape, shape: {}}
+      status: {type: text, nullable: false, distinct: 3, format: enum_like, length: {min: 1, max: 1, mean: 1, p95: 1}}
+    constraints: [{name: wide1_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: wide1_owner, method: btree, columns: [owner_id], bytes: 65536}, {name: wide1_pkey, method: btree, columns: [id], unique: true, bytes: 131072}]
+  public.wide2:
+    rows: 5000
+    bytes: 614400
+    columns:
+      amount: {type: 'numeric(12,2)', nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      created_at: {type: timestamp with time zone, nullable: false, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: bigint, nullable: false, distinct: 5000, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      name: {type: text, nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 3, max: 5, mean: 4.784, p95: 5}}
+      owner_id: {type: bigint, nullable: false, distinct: 500, range: {min: 0, max: 499, mean: 249.5, confidence: exact}}
+      payload: {type: jsonb, nullable: true, null_fraction: 0, distinct: 1, format: jsonb_shape, shape: {}}
+      status: {type: text, nullable: false, distinct: 3, format: enum_like, length: {min: 1, max: 1, mean: 1, p95: 1}}
+    constraints: [{name: wide2_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: wide2_owner, method: btree, columns: [owner_id], bytes: 65536}, {name: wide2_pkey, method: btree, columns: [id], unique: true, bytes: 131072}]
+  public.wide3:
+    rows: 5000
+    bytes: 614400
+    columns:
+      amount: {type: 'numeric(12,2)', nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      created_at: {type: timestamp with time zone, nullable: false, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: bigint, nullable: false, distinct: 5000, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      name: {type: text, nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 3, max: 5, mean: 4.784, p95: 5}}
+      owner_id: {type: bigint, nullable: false, distinct: 500, range: {min: 0, max: 499, mean: 249.5, confidence: exact}}
+      payload: {type: jsonb, nullable: true, null_fraction: 0, distinct: 1, format: jsonb_shape, shape: {}}
+      status: {type: text, nullable: false, distinct: 3, format: enum_like, length: {min: 1, max: 1, mean: 1, p95: 1}}
+    constraints: [{name: wide3_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: wide3_owner, method: btree, columns: [owner_id], bytes: 65536}, {name: wide3_pkey, method: btree, columns: [id], unique: true, bytes: 131072}]
+  public.wide4:
+    rows: 5000
+    bytes: 614400
+    columns:
+      amount: {type: 'numeric(12,2)', nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      created_at: {type: timestamp with time zone, nullable: false, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: bigint, nullable: false, distinct: 5000, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      name: {type: text, nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 3, max: 5, mean: 4.784, p95: 5}}
+      owner_id: {type: bigint, nullable: false, distinct: 500, range: {min: 0, max: 499, mean: 249.5, confidence: exact}}
+      payload: {type: jsonb, nullable: true, null_fraction: 0, distinct: 1, format: jsonb_shape, shape: {}}
+      status: {type: text, nullable: false, distinct: 3, format: enum_like, length: {min: 1, max: 1, mean: 1, p95: 1}}
+    constraints: [{name: wide4_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: wide4_owner, method: btree, columns: [owner_id], bytes: 65536}, {name: wide4_pkey, method: btree, columns: [id], unique: true, bytes: 131072}]
+  public.wide5:
+    rows: 5000
+    bytes: 614400
+    columns:
+      amount: {type: 'numeric(12,2)', nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      created_at: {type: timestamp with time zone, nullable: false, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: bigint, nullable: false, distinct: 5000, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      name: {type: text, nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 3, max: 5, mean: 4.784, p95: 5}}
+      owner_id: {type: bigint, nullable: false, distinct: 500, range: {min: 0, max: 499, mean: 249.5, confidence: exact}}
+      payload: {type: jsonb, nullable: true, null_fraction: 0, distinct: 1, format: jsonb_shape, shape: {}}
+      status: {type: text, nullable: false, distinct: 3, format: enum_like, length: {min: 1, max: 1, mean: 1, p95: 1}}
+    constraints: [{name: wide5_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: wide5_owner, method: btree, columns: [owner_id], bytes: 65536}, {name: wide5_pkey, method: btree, columns: [id], unique: true, bytes: 131072}]
+  public.wide6:
+    rows: 5000
+    bytes: 614400
+    columns:
+      amount: {type: 'numeric(12,2)', nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      created_at: {type: timestamp with time zone, nullable: false, distinct: 1, range: {min: "2026-07-30T12:55:03Z", max: "2026-07-30T12:55:03Z", confidence: exact}}
+      id: {type: bigint, nullable: false, distinct: 5000, unique: {value: true, confidence: exact, via: constraint}, range: {min: 1, max: 5000, mean: 2500.5, confidence: exact}}
+      name: {type: text, nullable: true, null_fraction: 0, distinct: {value: 5000, confidence: measured, via: hll, error: 0.008125}, unique: {value: true, confidence: exact, via: probe}, format: slug, length: {min: 3, max: 5, mean: 4.784, p95: 5}}
+      owner_id: {type: bigint, nullable: false, distinct: 500, range: {min: 0, max: 499, mean: 249.5, confidence: exact}}
+      payload: {type: jsonb, nullable: true, null_fraction: 0, distinct: 1, format: jsonb_shape, shape: {}}
+      status: {type: text, nullable: false, distinct: 3, format: enum_like, length: {min: 1, max: 1, mean: 1, p95: 1}}
+    constraints: [{name: wide6_pkey, kind: primary_key, columns: [id]}]
+    indexes: [{name: wide6_owner, method: btree, columns: [owner_id], bytes: 65536}, {name: wide6_pkey, method: btree, columns: [id], unique: true, bytes: 131072}]

@@ -99,12 +99,12 @@ func TestFindIndexIsDeterministicAcrossSchemas(t *testing.T) {
 		}
 	}
 
-	firstTable, _, ok := findIndex(f, "idx_shared", false)
+	firstTable, _, ok := findIndex(f, "idx_shared")
 	if !ok {
 		t.Fatal("index not found — the fixture no longer exercises findIndex")
 	}
 	for i := 0; i < 200; i++ {
-		tname, _, ok := findIndex(f, "idx_shared", false)
+		tname, _, ok := findIndex(f, "idx_shared")
 		if !ok {
 			t.Fatalf("iteration %d: index not found", i)
 		}

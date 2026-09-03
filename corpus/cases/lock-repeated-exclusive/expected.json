@@ -5,6 +5,18 @@
     {
       "code": "RS-LOCK",
       "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-REVERSE",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-CONSTRAINT",
+      "severity": "warn"
     }
   ]
 }

@@ -67,6 +67,12 @@ func Registered() []Analyzer {
 // (INV-BLAST-RADIUS-ZERO, PRD §11).
 var ErrHostMatchesSource = errors.New("validate: refusing to run against the fixture's source host — validate only ever touches a disposable or provided target, never production")
 
+// ErrNoFixtureSource is the refusal when a fixture carries no meta.source, so
+// the host-match guard has nothing to compare against.
+var ErrNoFixtureSource = errors.New(
+	"validate: this fixture records no source host (meta.source), so rowshape cannot verify that the " +
+		"target is not the database it was pulled from")
+
 // CheckHost enforces the host-match refusal (PRD §11). fixtureSource is
 // meta.source (a salted host hash); targetHost is the plain host of the target
 // URL. It refuses when the target is the host the fixture was pulled from. Empty
@@ -94,13 +100,6 @@ var ErrHostMatchesSource = errors.New("validate: refusing to run against the fix
 // connection. The refusal is the last line, not the only one: it is why
 // `--ephemeral` wants a disposable server, not a hostname that merely looks
 // different from production.
-// ErrNoFixtureSource is the refusal when a fixture carries no meta.source, so
-// the host-match guard has nothing to compare against.
-var ErrNoFixtureSource = errors.New(
-	"validate: this fixture records no source host (meta.source), so rowshape cannot verify that the " +
-		"target is not the database it was pulled from")
-
-// CheckHost enforces the host-match refusal.
 //
 // A missing source is permitted HERE, and that is a deliberate split rather than
 // an oversight — see CheckWriteTarget, which does not permit it. The two paths
@@ -191,6 +190,37 @@ func BuildResult(f *fixture.Fixture, c *Capture, analyzers []Analyzer, groundTru
 	// refined in P2-T17).
 	if !c.Success {
 		overall = verdict.Combine(overall, verdict.VerdictFail)
+		// And SAY WHY. Flooring to FAIL without a finding left the verdict carrying no
+		// code, no location and no remediation, with the engine's message going to
+		// stderr only — so `--json` reported `{"verdict":"FAIL","findings":null}` and a
+		// consumer had nothing at all. That breaks the wedge directly: the MCP tool and
+		// the GitHub Action both render this struct and nothing else, so an agent was
+		// told FAIL and given nothing to act on, which is exactly the hand-waving the
+		// agent-rule harness scores against. INV-VERDICT-STABLE also requires
+		// remediation on every error.
+		//
+		// This is the most common real failure of all — a migration with a typo — and
+		// it was the one case the contract said nothing about. The finding itself is
+		// built by an ANALYZER (internal/findings, RS-APPLY-001): analyzers already
+		// receive the Capture, and building it here would need this package to import
+		// the finding registry, which imports this one.
+		findings = dropGenericApplyFailure(findings)
+	}
+	// A statement cancelled by the apply ceiling is a THIRD outcome, and it floors
+	// to WARN rather than FAIL. Nothing rejected the migration — it simply did not
+	// finish inside the ceiling, which is evidence its duration is at least that
+	// (the `outage` bucket, INV-DURATIONS-BUCKETS), not evidence that it is broken.
+	// FAIL would assert a defect nobody observed; PASS would certify a statement
+	// that never completed as safe. WARN is the only honest floor.
+	if c.TimedOut {
+		overall = verdict.Combine(overall, verdict.VerdictWarn)
+	}
+
+	// [] rather than null, so a consumer can iterate without a nil check. A JSON
+	// contract that sometimes yields null for "none" makes every reader write the
+	// same guard, and some of them forget.
+	if findings == nil {
+		findings = []verdict.Finding{}
 	}
 
 	return verdict.Result{
@@ -200,6 +230,47 @@ func BuildResult(f *fixture.Fixture, c *Capture, analyzers []Analyzer, groundTru
 		DurationMs: c.DurationMs,
 		Findings:   findings,
 	}
+}
+
+// applyFailureCode is the generic "the migration did not apply" finding. It is
+// named here rather than imported because internal/findings imports THIS package.
+const applyFailureCode = "RS-APPLY-001"
+
+// dropGenericApplyFailure removes the generic apply-failure finding when a
+// specific analyzer has already explained the same failure.
+//
+// RS-APPLY-001 is a FLOOR, not an addition. When a migration is rejected because
+// the data does not permit it, RS-DATA-001 already says so in the column's own
+// terms and its remediation tells you what to do about the NULLs — the generic
+// finding then adds a second entry for one event and dilutes the actionable
+// advice with "read the SQLSTATE". Five corpus cases regressed exactly this way
+// the moment the generic finding existed.
+//
+// An analyzer cannot make this call: they run independently and none of them can
+// see what the others produced. Here is where the whole set is known.
+//
+// Only ERROR findings suppress it. A warning about the migration is not an
+// explanation of why it was rejected, so a capture that failed with nothing but
+// warnings still gets the generic account of the failure.
+func dropGenericApplyFailure(findings []verdict.Finding) []verdict.Finding {
+	explained := false
+	for _, f := range findings {
+		if f.Code != applyFailureCode && f.Severity == verdict.SeverityError {
+			explained = true
+			break
+		}
+	}
+	if !explained {
+		return findings
+	}
+	out := findings[:0]
+	for _, f := range findings {
+		if f.Code == applyFailureCode {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // wantFor maps a finding's severity to the verdict it argues for: an error is a

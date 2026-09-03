@@ -12,6 +12,7 @@ package validate
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -36,6 +37,15 @@ type Capture struct {
 	// Populated by the pipeline from the hydration report; empty for a provided
 	// (ground-truth) target, where the fixture's declared rows are already real.
 	TableRows map[string]int64
+	// TimedOut is true when a statement was cancelled by the apply ceiling rather
+	// than completing or being rejected.
+	//
+	// It is kept separate from Success because it answers a different question.
+	// Success=false means the migration was REJECTED — something said no, and that
+	// is a FAIL with a cause. TimedOut means nothing said anything: the statement
+	// simply did not finish, so the migration is neither proven safe nor proven
+	// broken. A capture that timed out can never license a PASS.
+	TimedOut bool
 	// Calibration, when set, carries a SECOND measured run at a different scale so
 	// analyzers can fit the cost curve to two points and mark the estimate
 	// `measured` (RFC §9.2, `validate --calibrate`). Nil for a normal single-run
@@ -70,7 +80,23 @@ type Statement struct {
 	// (which holds no exclusive lock but cannot run in a transaction block).
 	IsIndexBuild bool
 	Concurrent   bool
+	// TimedOut records that the statement was cancelled by the apply ceiling
+	// rather than completing or being rejected.
+	//
+	// This is a third outcome, not a flavour of failure. A rejected statement is a
+	// real FAIL — the data or the schema said no. A cancelled one said nothing at
+	// all: it simply did not finish inside the ceiling, which is evidence its
+	// duration is AT LEAST the ceiling, and that is what the `outage` bucket means
+	// (INV-DURATIONS-BUCKETS). Conflating the two would report an outage as a
+	// constraint violation; conflating it with success would let a statement that
+	// never finished license a PASS.
+	TimedOut bool
 }
+
+// queryCanceled is SQLSTATE 57014, which Postgres raises when statement_timeout
+// fires. It is also what a client-side cancel produces, so it is only read as a
+// ceiling hit when a ceiling was actually set.
+const queryCanceled = "57014"
 
 // ConstraintViolation reports whether the statement failed on an integrity
 // constraint (SQLSTATE class 23) — a real problem the migration hit against the
@@ -89,14 +115,55 @@ func (c *Capture) FailedStatement() *Statement {
 	return nil
 }
 
+// DefaultStatementTimeout is the ceiling Apply puts on a single migration
+// statement.
+//
+// It exists because reproducing a hazard faithfully means reproducing how long it
+// takes. Once the disposable database enforces the foreign keys production has, a
+// cascading DELETE through an unindexed reference is an outage there too — the
+// corpus's own `cascade_delete_fanout` case turned a 190-second suite into a
+// ten-minute hard timeout the moment those keys started existing. `validate` must
+// not have to SURVIVE an outage in order to REPORT one.
+//
+// Sixty seconds is chosen against what the number is used for, not against how
+// long a real migration takes. Hydrated data is a fraction of production, and
+// `validate` runs inside an agent's turn or a CI job; a statement still running
+// after a minute on that data is already decisively in the slow/outage buckets,
+// and letting it run to completion buys no information the ceiling has not
+// already given.
+const DefaultStatementTimeout = 60 * time.Second
+
 // Apply runs each statement against conn in application order, capturing the six
-// signal classes. A statement that can run inside a transaction is executed in
-// its own transaction so its held locks can be inspected before commit; a
-// CONCURRENTLY index build (which cannot run in a transaction block) is executed
-// directly. Application stops at the first error — a broken migration's later
-// statements are not meaningful.
+// signal classes, with each statement capped at DefaultStatementTimeout. See
+// ApplyWithTimeout for the configurable form.
 func Apply(ctx context.Context, conn *pgx.Conn, statements []Located) *Capture {
+	return ApplyWithTimeout(ctx, conn, statements, DefaultStatementTimeout)
+}
+
+// ApplyWithTimeout runs each statement against conn in application order,
+// capturing the six signal classes. A statement that can run inside a transaction
+// is executed in its own transaction so its held locks can be inspected before
+// commit; a CONCURRENTLY index build (which cannot run in a transaction block) is
+// executed directly. Application stops at the first error — a broken migration's
+// later statements are not meaningful — and at the first timeout, for the same
+// reason: whatever came after depended on a statement that never landed.
+//
+// A timeout of zero disables the ceiling. That is a real option (a deliberate
+// long-running backfill on a big fixture) and a dangerous default, which is why it
+// has to be asked for.
+func ApplyWithTimeout(ctx context.Context, conn *pgx.Conn, statements []Located, timeout time.Duration) *Capture {
 	cap := &Capture{Success: true}
+	// Session-level, so it covers every statement including the ones run outside a
+	// transaction (CREATE INDEX CONCURRENTLY), and so a statement's own explicit SET
+	// can still override it — a migration that says it wants longer is making a
+	// deliberate statement about itself.
+	if timeout > 0 {
+		if _, err := conn.Exec(ctx, fmt.Sprintf("SET statement_timeout = %d", timeout.Milliseconds())); err != nil {
+			// A server that will not accept the ceiling is not a reason to refuse to
+			// run; it is a reason not to claim one is in force.
+			timeout = 0
+		}
+	}
 	start := time.Now()
 	for _, loc := range statements {
 		sql := strings.TrimSpace(loc.SQL)
@@ -114,6 +181,15 @@ func Apply(ctx context.Context, conn *pgx.Conn, statements []Located) *Capture {
 		}
 		st := applyOne(ctx, conn, sql)
 		st.File, st.Line = loc.File, loc.Line
+		// A cancellation is only attributable to the ceiling when a ceiling is in
+		// force; otherwise 57014 came from somewhere else and is an ordinary error.
+		if timeout > 0 && st.ErrCode == queryCanceled {
+			st.TimedOut = true
+			st.ErrCode, st.ErrMsg = "", ""
+			cap.TimedOut = true
+			cap.Statements = append(cap.Statements, st)
+			break
+		}
 		cap.Statements = append(cap.Statements, st)
 		if st.ErrCode != "" {
 			cap.Success = false

@@ -2,6 +2,13 @@
   "description": "DELETE cascading through a long-tailed fan-out (max 12902) risks a huge, slow cascade.",
   "verdict": "WARN",
   "findings": [
-    {"code": "RS-PERF", "severity": "warn"}
+    {
+      "code": "RS-PERF",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-PERF",
+      "severity": "warn"
+    }
   ]
 }

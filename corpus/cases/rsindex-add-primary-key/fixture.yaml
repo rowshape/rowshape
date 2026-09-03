@@ -1,0 +1,15 @@
+rowshape_fixture: "1"
+meta:
+  id: rsindex-add-primary-key
+  engine: {name: postgres, version: "16"}
+  privacy: standard
+  profile: {mode: fast, escalated: []}
+tables:
+  public.events:
+    rows: {value: 50000000, confidence: exact}
+    columns:
+      # A unique, non-null column with no PRIMARY KEY yet — so ADD PRIMARY KEY (id)
+      # builds the index over existing data. `unique` lets the hydrator generate
+      # collision-free values so the constraint actually builds under the cap.
+      id: {type: bigint, nullable: false, unique: {value: true, confidence: exact, via: probe}}
+      payload: {type: text, nullable: true}

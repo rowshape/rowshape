@@ -66,11 +66,17 @@ func annotationMessage(f verdict.Finding) string {
 // code, severity, estimate bucket, and remediation. This is what a reviewer
 // reads in the checks tab; every field comes from verdict.Result.
 func WriteSummary(w io.Writer, r verdict.Result) {
-	fmt.Fprintf(w, "## rowshape: %s\n\n", verdictWord(r.Verdict))
+	// The verdict word and the fixture id/digest flow from a verdict JSON that may
+	// be untrusted (a committed fixture's meta.id, or a piped verdict). The step
+	// summary is rendered as Markdown, so an id like "x`\n\n## rowshape: PASS" would
+	// break out of its code span and inject a spoofed heading. Neutralize the
+	// structure-breaking characters before embedding — a real verdict/id/digest has
+	// none.
+	fmt.Fprintf(w, "## rowshape: %s\n\n", inlineText(verdictWord(r.Verdict)))
 	if r.Fixture.ID != "" || r.Fixture.Digest != "" {
-		fmt.Fprintf(w, "Fixture `%s`", r.Fixture.ID)
+		fmt.Fprintf(w, "Fixture `%s`", inlineCode(r.Fixture.ID))
 		if d := shortDigest(r.Fixture.Digest); d != "" {
-			fmt.Fprintf(w, " (`%s`)", d)
+			fmt.Fprintf(w, " (`%s`)", inlineCode(d))
 		}
 		fmt.Fprintf(w, " · %dms\n\n", r.DurationMs)
 	}
@@ -149,6 +155,24 @@ func cell(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "|", "\\|")
 	return s
+}
+
+// inlineText neutralizes the characters that would let a value break out of a
+// single Markdown line (and thus inject a heading/list/table of its own). Used
+// for values interpolated into the summary heading.
+func inlineText(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
+}
+
+// inlineCode neutralizes a value embedded inside a Markdown inline-code span: a
+// backtick would close the span and a newline would end it, so an id or digest
+// could otherwise escape into arbitrary Markdown. A legitimate fixture id/digest
+// contains neither.
+func inlineCode(s string) string {
+	s = strings.ReplaceAll(s, "`", "'")
+	return inlineText(s)
 }
 
 // escapeData escapes a GitHub workflow-command message per the documented rules.

@@ -2,6 +2,13 @@
   "description": "ALTER COLUMN ... TYPE rewrites all 3M rows under ACCESS EXCLUSIVE — RS-LOCK, a WARN with the online-swap recipe.",
   "verdict": "WARN",
   "findings": [
-    {"code": "RS-LOCK", "severity": "warn"}
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
   ]
 }

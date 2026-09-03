@@ -1,18 +1,20 @@
 ---
-title: 'RS-INDEX-002 — DROP INDEX without CONCURRENTLY takes ACCESS EXCLUSIVE on the table'
-description: 'A non-concurrent DROP INDEX takes ACCESS EXCLUSIVE on the TABLE, not merely on the index — so every read and write on the table queues behind it, and behind anything already holding a conflicting lock.'
+title: 'RS-INDEX-002 — ADD PRIMARY KEY or UNIQUE builds an index under ACCESS EXCLUSIVE'
+description: 'Adding a PRIMARY KEY or UNIQUE constraint over existing data builds a unique index while holding an ACCESS EXCLUSIVE lock — no reads or writes proceed for the whole O(n log n) build, and ADD PRIMARY KEY also scans the column for NULLs.'
 ---
 
 **Namespace:** `RS-INDEX` · **Code:** `RS-INDEX-002`
 
-A non-concurrent DROP INDEX takes ACCESS EXCLUSIVE on the TABLE, not merely on the index — so every read and write on the table queues behind it, and behind anything already holding a conflicting lock. The drop itself is fast, which is exactly why it looks harmless in a sandbox: the risk is the lock queue on a busy table, not the work.
+Adding a PRIMARY KEY or UNIQUE constraint over existing data builds a unique index while holding an ACCESS EXCLUSIVE lock — no reads or writes proceed for the whole O(n log n) build, and ADD PRIMARY KEY also scans the column for NULLs. On a large table that is a full outage, not just a write block. This is the lock cost of building the constraint, separate from whether the data lets it build at all (RS-DATA-014).
 
 ## Remediation
 
-Use DROP INDEX CONCURRENTLY, which takes only SHARE UPDATE EXCLUSIVE and does not block reads or writes. It cannot run inside a transaction block (see RS-TX-001), so it needs its own migration with the runner's transaction wrapping disabled. Set a short lock_timeout either way, so a drop that cannot get its lock fails fast instead of queueing every query behind it.
+Build the index first without the exclusive lock, then adopt it: CREATE UNIQUE INDEX CONCURRENTLY on the column(s), then attach it with ALTER TABLE ... ADD PRIMARY KEY/UNIQUE USING INDEX <name>, which holds the exclusive lock only briefly. For a PRIMARY KEY, ensure the column is already NOT NULL first (add a validated CHECK (col IS NOT NULL) if needed).
 
 ## References
 
+- RFC §6.5
+- RFC §9.1
 - PRD §10
 
 ---

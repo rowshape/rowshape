@@ -90,6 +90,12 @@ func TestCapMatchesCorpusScenarios(t *testing.T) {
 				if !strings.Contains(out.Remediation, "public.users.email") {
 					t.Errorf("resolve command %q should target the weak column public.users.email", out.Remediation)
 				}
+				// It must NOT be the bare `pull --exact <column>` form: that fed the
+				// column selector where pull expects a connection URL, so running it
+				// verbatim errored. The honest form names the source connection.
+				if strings.Contains(out.Remediation, "pull --exact public.users.email") {
+					t.Errorf("resolve command uses the broken `pull --exact <column>` form that errors when run: %q", out.Remediation)
+				}
 			} else {
 				if got != VerdictPass {
 					t.Errorf("proven dependency must allow PASS, got %s", got)

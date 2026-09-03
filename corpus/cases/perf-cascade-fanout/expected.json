@@ -5,6 +5,10 @@
     {
       "code": "RS-PERF",
       "severity": "warn"
+    },
+    {
+      "code": "RS-REVERSE",
+      "severity": "warn"
     }
   ]
 }

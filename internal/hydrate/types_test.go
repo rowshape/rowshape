@@ -46,9 +46,9 @@ func TestUnmodelledTypesAreNotFakedAsText(t *testing.T) {
 	cases := []struct{ typ, want string }{
 		{"inet", "192.0.2."},
 		{"cidr", "192.0.2."},
-		{"macaddr", "00:00:5e:00:53:"},
+		{"macaddr", "08:00:2b:"},
 		{"interval", "seconds"},
-		{"xml", "<r id="},
+		{"xml", "<value>"},
 	}
 	for _, c := range cases {
 		t.Run(c.typ, func(t *testing.T) {
@@ -63,29 +63,25 @@ func TestUnmodelledTypesAreNotFakedAsText(t *testing.T) {
 	}
 }
 
-// A nullable column of a type rowshape cannot model gets NULL — the one literal
-// every nullable column accepts — rather than a string that will not load.
-func TestUnmodelledNullableTypeGetsNull(t *testing.T) {
-	got := sqlFor(t, typeFixture("tsvector", true))
-	if strings.Contains(got, "val_") {
-		t.Errorf("an unmodelled nullable type must not be faked as text:\n%s", got)
-	}
-	if !strings.Contains(strings.ToUpper(got), "NULL") {
-		t.Errorf("expected NULL for an unmodelled nullable type, got:\n%s", got)
-	}
-}
-
-// A NOT NULL column of an unmodelled type is refused, naming the column, the
-// type, and the ways forward — rather than emitting SQL that fails later with a
-// Postgres error mentioning neither.
-func TestUnmodelledNotNullTypeIsRefused(t *testing.T) {
-	_, err := Generate(typeFixture("tsvector", false), Options{Seed: 1, Scale: 1})
-	if err == nil {
-		t.Fatal("a NOT NULL column of an unsynthesizable type must be refused, not faked")
-	}
-	for _, want := range []string{"t.c", "tsvector", "--target", "format"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal must mention %q, got: %v", want, err)
+// A column whose type has a strict literal grammar and no synthesis rule is
+// REFUSED at generation time — nullable or not — naming the column, the type,
+// and the ways forward, rather than emitting SQL that fails hundreds of thousands
+// of rows later inside COPY with a pgx message naming neither.
+//
+// Nullability makes no difference here. Hydrating such a column as all-NULL would
+// load, but it would hand validate a table whose column holds nothing, and a
+// migration touching that column would be certified against data that does not
+// resemble production — a silent wrong PASS in place of a loud refusal.
+func TestUnsynthesizableTypeIsRefused(t *testing.T) {
+	for _, nullable := range []bool{true, false} {
+		_, err := Generate(typeFixture("tsvector", nullable), Options{Seed: 1, Scale: 1})
+		if err == nil {
+			t.Fatalf("nullable=%v: an unsynthesizable type must be refused, not faked", nullable)
+		}
+		for _, want := range []string{"t.c", "tsvector", "--target"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("nullable=%v: the refusal must mention %q, got: %v", nullable, want, err)
+			}
 		}
 	}
 }

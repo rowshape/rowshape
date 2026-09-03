@@ -56,7 +56,15 @@ func buildBinary(t *testing.T, root string) string {
 func runValidate(t *testing.T, bin, root, migrations, admin string, warnFail bool) (verdict.Result, int) {
 	t.Helper()
 	fixture := filepath.Join(root, "demo", "repo", "rowshape.yaml")
-	args := []string{"validate", fixture, "--migrations", filepath.Join(root, "demo", "repo", migrations), "--ephemeral", admin, "--json", "--seed", "1"}
+	// --statement-timeout above the default 1m. The rewrite's backfill is a
+	// bounded batch LOOP, and the whole loop is one statement to the server, so
+	// every batch is charged to the same ceiling — about 90s for the fixture's
+	// 5,000,000 rows. At the 1m default the loop is cancelled, which floors the
+	// verdict to WARN with no findings (D-019) and reads as the demo breaking
+	// when nothing about the migration is wrong. A real backfill of five million
+	// rows takes minutes; the ceiling has to admit that.
+	args := []string{"validate", fixture, "--migrations", filepath.Join(root, "demo", "repo", migrations),
+		"--ephemeral", admin, "--json", "--seed", "1", "--statement-timeout", "5m"}
 	if warnFail {
 		args = append(args, "--warn-fail")
 	}

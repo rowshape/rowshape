@@ -11,6 +11,10 @@ You can read any of this from the CLI with `rowshape explain <CODE>`, or from an
 agent with the `explain_finding` MCP tool. These pages are generated from that
 same catalog, so they never drift from what the tool returns.
 
+## RS-APPLY
+
+- [`RS-APPLY-001`](./rs-apply-001/) — Migration did not apply
+
 ## RS-CONSTRAINT — Constraints that cannot be added or validated
 
 - [`RS-CONSTRAINT-001`](./rs-constraint-001/) — NOT VALID constraint validated in the same transaction
@@ -32,14 +36,14 @@ same catalog, so they never drift from what the tool returns.
 ## RS-INDEX — Index builds that fail or block
 
 - [`RS-INDEX-001`](./rs-index-001/) — Non-concurrent CREATE INDEX blocks writes
-- [`RS-INDEX-002`](./rs-index-002/) — DROP INDEX without CONCURRENTLY takes ACCESS EXCLUSIVE on the table
+- [`RS-INDEX-002`](./rs-index-002/) — ADD PRIMARY KEY or UNIQUE builds an index under ACCESS EXCLUSIVE
+- [`RS-INDEX-003`](./rs-index-003/) — DROP INDEX without CONCURRENTLY takes ACCESS EXCLUSIVE on the table
 - [`RS-INDEX-010`](./rs-index-010/) — CREATE UNIQUE INDEX without proven uniqueness
 - [`RS-INDEX-020`](./rs-index-020/) — Non-concurrent REINDEX rebuilds under lock
 
 ## RS-LOCK — Locks a migration takes, and for how long
 
 - [`RS-LOCK-001`](./rs-lock-001/) — ACCESS EXCLUSIVE lock for a full table rewrite
-- [`RS-LOCK-002`](./rs-lock-002/) — ADD PRIMARY KEY builds an index under ACCESS EXCLUSIVE
 - [`RS-LOCK-003`](./rs-lock-003/) — ATTACH PARTITION validates the incoming rows under a lock on the parent
 - [`RS-LOCK-010`](./rs-lock-010/) — The migration takes ACCESS EXCLUSIVE without setting lock_timeout
 - [`RS-LOCK-011`](./rs-lock-011/) — Several statements take ACCESS EXCLUSIVE on the same table

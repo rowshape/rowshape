@@ -44,13 +44,18 @@ export PG='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable'
 
 # 1) Naive migration is rejected (WARN RS-LOCK-001; warn-as-fail exits non-zero)
 rowshape validate demo/repo/rowshape.yaml \
-  --migrations demo/repo/migrations/naive --ephemeral "$PG" --warn-fail
+  --migrations demo/repo/migrations/naive --ephemeral "$PG" --warn-fail   --statement-timeout 5m
 # -> verdict WARN, finding RS-LOCK-001, exit 2 (or 1 with --warn-fail)
 
 # 2) The three-step rewrite passes
 rowshape validate demo/repo/rowshape.yaml \
-  --migrations demo/repo/migrations/rewrite --ephemeral "$PG"
+  --migrations demo/repo/migrations/rewrite --ephemeral "$PG"   --statement-timeout 5m
 # -> verdict PASS, exit 0
+#
+# The ceiling is raised from the 1m default deliberately: the rewrite's backfill
+# is a bounded batch loop over 5,000,000 rows and takes about 90s, and the whole
+# loop is ONE statement to the server. Cancelled at 1m it would floor to WARN
+# (D-019) with no findings at all.
 ```
 
 The GitHub Action (`uses: rowshape/rowshape@v1`) runs exactly this in CI, and

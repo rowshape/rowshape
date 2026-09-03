@@ -1,0 +1,20 @@
+rowshape_fixture: "1"
+meta:
+  id: bad-include-in-key
+  engine: {name: postgres, version: "16"}
+tables:
+  public.orders:
+    rows: {value: 1000, confidence: exact}
+    columns:
+      customer_id: {type: bigint, nullable: false}
+      created_at: {type: timestamp with time zone, nullable: false}
+      total: {type: 'numeric(12,2)', nullable: true}
+    indexes:
+      # `total` is INCLUDE payload, not part of the key. Counting it as a key
+      # column describes a WEAKER constraint than production enforces: a migration
+      # violating the real (customer_id, created_at) uniqueness would reach PASS.
+      - name: orders_cust_created
+        method: btree
+        columns: [customer_id, created_at, total]
+        include: [total]
+        unique: true

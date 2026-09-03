@@ -146,8 +146,11 @@ func TestParseComparison(t *testing.T) {
 // that is a false provenance trail, and it borrowed the row count's confidence
 // for a claim the row count does not support.
 //
-// The honest path (`<table>.<column>.range`) resolves to `absent`, because
-// fixture.Range carries no confidence field at all. See D-010.
+// The honest path is `<table>.<column>.range`. It used to resolve to `absent`
+// because fixture.Range carried no confidence at all (D-010); it now resolves to
+// the range's own confidence (D-020), and a fixture like this one — written
+// without the field — still reads as `absent`, the weakest reading for a fact
+// whose provenance is unknown.
 func TestCheckConflictDependsOnTheRangeFact(t *testing.T) {
 	f, err := fixture.Parse([]byte(`rowshape_fixture: "1"
 meta: {id: t, engine: {name: postgres, version: "16"}}

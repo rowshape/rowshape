@@ -2,10 +2,10 @@ package findings
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/rowshape/rowshape/internal/fixture"
+	"github.com/rowshape/rowshape/internal/sqlkind"
 	"github.com/rowshape/rowshape/internal/validate"
 	"github.com/rowshape/rowshape/internal/verdict"
 )
@@ -261,11 +261,10 @@ var intRank = map[string]int{
 }
 
 // isNarrowing reports whether changing oldType to newType can lose data: an
-// integer narrowing, an unbounded string to a length-limited one, or a
+// integer narrowing, a string whose length cap shrinks (or gains one), or a
 // numeric/float to an integer.
 func isNarrowing(oldType, newType string) bool {
 	o := strings.ToLower(strings.TrimSpace(baseSQLType(oldType)))
-	nFull := strings.ToLower(strings.TrimSpace(newType))
 	n := strings.ToLower(strings.TrimSpace(baseSQLType(newType)))
 
 	if ro, ok := intRank[o]; ok {
@@ -273,26 +272,24 @@ func isNarrowing(oldType, newType string) bool {
 			return rn < ro
 		}
 	}
-	// String types: a length limit only loses data if it is SHORTER than what
-	// the column already permits.
-	//
-	// This used to be `old is a string type && new contains "("`, which never
-	// compared the two lengths — so `varchar(50) -> varchar(255)` (a widening)
-	// and even `varchar(50) -> varchar(50)` (no change at all) were both reported
-	// as "narrowing can truncate data irreversibly". That is a false FAIL on a
-	// safe migration, which is worse than a missed finding: it blocks correct
-	// work and teaches people to ignore the tool.
-	if isStringType(o) && strings.Contains(nFull, "(") {
-		oldLen, oldBounded := typeLength(oldType)
+	if isBoundedStringBase(o) {
+		// A string change truncates only when the NEW type imposes a cap the old
+		// values could exceed. Comparing lengths — not merely "the new type has a
+		// modifier" — is what separates a truncating shrink from a harmless widen:
+		//
+		//   varchar(100) -> varchar(200)   widen, loses nothing        (not flagged)
+		//   varchar(200) -> varchar(100)   shrink, truncates           (flagged)
+		//   text         -> varchar(255)   gains a cap, can truncate    (flagged)
+		//   varchar(100) -> text           drops the cap, widens        (not flagged)
 		newLen, newBounded := typeLength(newType)
-		switch {
-		case !newBounded:
-			return false // e.g. -> text: strictly wider
-		case !oldBounded:
-			return true // text/varchar with no limit -> varchar(n): a real limit appears
-		default:
-			return newLen < oldLen
+		if !newBounded {
+			return false // widening to an unbounded type never truncates
 		}
+		oldLen, oldBounded := typeLength(oldType)
+		if !oldBounded {
+			return true // unbounded old (text / unadorned varchar) -> a cap can truncate
+		}
+		return newLen < oldLen // both capped: only a smaller cap truncates
 	}
 	if (o == "numeric" || o == "decimal" || o == "double precision" || o == "real") && (n == "integer" || n == "bigint" || n == "smallint" || n == "int") {
 		return true
@@ -300,46 +297,24 @@ func isNarrowing(oldType, newType string) bool {
 	return false
 }
 
-// isStringType reports whether a base type is a character type.
-func isStringType(base string) bool {
-	switch base {
-	case "text", "varchar", "character varying", "character", "char":
-		return true
-	}
-	return false
-}
+// The character-type readers below are thin aliases over internal/sqlkind, which
+// is the single home for this parsing now that internal/hydrate needs the same
+// reading of the same type strings (it must keep a synthesized value inside the
+// column it is COPYed into). The aliases stay so the analyzer code reads as it
+// did; the parsing itself has exactly one implementation.
 
-// typeLength extracts the length modifier from a type, e.g. "varchar(255)" -> 255.
-// bounded is false for a type with no modifier ("text", "varchar"), which is the
-// unbounded case and must never be treated as length 0.
-func typeLength(t string) (n int, bounded bool) {
-	open := strings.Index(t, "(")
-	if open < 0 {
-		return 0, false
-	}
-	close := strings.Index(t[open:], ")")
-	if close < 0 {
-		return 0, false
-	}
-	inner := strings.TrimSpace(t[open+1 : open+close])
-	// numeric(10,2) has a scale; only the first component is the length.
-	if comma := strings.Index(inner, ","); comma >= 0 {
-		inner = strings.TrimSpace(inner[:comma])
-	}
-	v, err := strconv.Atoi(inner)
-	if err != nil || v < 0 {
-		return 0, false
-	}
-	return v, true
-}
+// isBoundedStringBase reports whether a base type is a character string type that
+// can carry a length modifier.
+func isBoundedStringBase(base string) bool { return sqlkind.IsBoundedStringBase(base) }
 
-// baseSQLType strips a type's length/precision modifier ("varchar(255)" -> "varchar").
-func baseSQLType(t string) string {
-	if i := strings.IndexByte(t, '('); i >= 0 {
-		return strings.TrimSpace(t[:i])
-	}
-	return t
-}
+// typeLength extracts the length modifier from a character type: typeLength(
+// "varchar(200)") is (200, true); typeLength("text") is (0, false). Only the
+// first modifier is read, so a stray precision list cannot mislead it.
+func typeLength(t string) (int, bool) { return sqlkind.TypeLength(t) }
+
+// baseSQLType strips a type's length/precision modifier ("varchar(255)" ->
+// "varchar"), also lowercasing and trimming it.
+func baseSQLType(t string) string { return sqlkind.BaseType(t) }
 
 // irreversibleGateNote is appended to findings about IRREVERSIBLE data loss.
 //

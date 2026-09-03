@@ -27,8 +27,8 @@ const histogramSkewFactor = 4.0
 // they would miss a value-concentration skew (one value owning most rows) — the
 // canonical case §6.2 exists for. Bounds are real values, so ApplyPrivacy gates
 // them at standard+ and drops them under strict (RFC §8.2).
-func (r *reader) measureHistogram(ctx context.Context, from, column string) (*fixture.Histogram, error) {
-	bounds, err := r.equiDepthBounds(ctx, from, column, histogramBuckets)
+func (r *reader) measureHistogram(ctx context.Context, from, column, typ string) (*fixture.Histogram, error) {
+	bounds, err := r.equiDepthBounds(ctx, from, column, typ, histogramBuckets)
 	if err != nil {
 		return nil, err
 	}
@@ -50,13 +50,15 @@ func (r *reader) measureHistogram(ctx context.Context, from, column string) (*fi
 // value at each i/buckets quantile. Because it runs over the actual data, a
 // value-concentration skew shows up as many quantiles landing on the same dense
 // region — exactly the skew a histogram must capture.
-func (r *reader) equiDepthBounds(ctx context.Context, from, column string, buckets int) ([]float64, error) {
+func (r *reader) equiDepthBounds(ctx context.Context, from, column, typ string, buckets int) ([]float64, error) {
 	fractions := make([]float64, buckets+1)
 	for i := 0; i <= buckets; i++ {
 		fractions[i] = float64(i) / float64(buckets)
 	}
 	c := pgx.Identifier{column}.Sanitize()
-	q := "SELECT percentile_cont($1::float8[]) WITHIN GROUP (ORDER BY (" + c + ")::float8) FROM " + from + " WHERE " + c + " IS NOT NULL"
+	// numericCast, not a bare ::float8: money cannot cast to a float directly, and a
+	// money column would abort the pull here exactly as it did in rangeStat.
+	q := "SELECT percentile_cont($1::float8[]) WITHIN GROUP (ORDER BY " + numericCast(c, typ) + ") FROM " + from + " WHERE " + c + " IS NOT NULL"
 
 	var bounds []float64
 	if err := r.tx.QueryRow(ctx, q, fractions).Scan(&bounds); err != nil {

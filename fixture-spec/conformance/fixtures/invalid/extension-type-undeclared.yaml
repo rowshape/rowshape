@@ -1,0 +1,13 @@
+rowshape_fixture: "1"
+meta:
+  id: bad-extension-type-undeclared
+  engine: {name: postgres, version: "16"}
+tables:
+  public.users:
+    rows: {value: 1000, confidence: exact}
+    columns:
+      id: {type: bigint, nullable: false}
+      # citext only exists once the extension is installed. With no `extensions`
+      # block a consumer cannot create the type, and the whole DDL fails with
+      # `type "citext" does not exist` — validation cannot run on the schema at all.
+      email: {type: citext, nullable: true}

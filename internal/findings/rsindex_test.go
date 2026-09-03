@@ -134,6 +134,20 @@ func TestRSIndexReindexBytesBasis(t *testing.T) {
 	if fnd.Estimate == nil || fnd.Estimate.Bucket != verdict.BucketOutage {
 		t.Errorf("4.2 GB reindex should bucket as outage, got %+v", fnd.Estimate)
 	}
+	// The estimate rests on the index's bytes, NOT the row count. Declaring
+	// <table>.rows was false provenance (a fact this finding never reads) and
+	// borrowed that fact's confidence for a byte-based claim (CR-CONSTRAINT-010
+	// bug class). depends_on must not cite rows.
+	for _, dep := range fnd.DependsOn {
+		if strings.HasSuffix(dep, ".rows") {
+			t.Errorf("depends_on = %v cites a row-count fact the byte-based estimate never reads", fnd.DependsOn)
+		}
+	}
+	// The byte→duration projection is a model, so the estimate is `estimated`,
+	// not left blank.
+	if fnd.Estimate.Confidence != string(fixture.Estimated) {
+		t.Errorf("estimate confidence = %q, want %q (a bucket modelled from bytes)", fnd.Estimate.Confidence, fixture.Estimated)
+	}
 }
 
 // TestRSIndexConcurrentNotFlagged: CREATE INDEX CONCURRENTLY takes no exclusive
@@ -204,6 +218,167 @@ func indexFindingByCode(f *fixture.Fixture, c *validate.Capture, code string) *v
 	return nil
 }
 
+// TestAddPrimaryKeyFlagged: ADD [CONSTRAINT] PRIMARY KEY builds a unique index
+// under ACCESS EXCLUSIVE. Nothing flagged it before (rsLock excludes ADD PRIMARY,
+// rsConstraint files it under OTHER, rsData keys on UNIQUE), so a PK added to a
+// 50M-row table returned PASS with zero findings. It must now warn with a
+// row-based build estimate.
+func TestAddPrimaryKeyFlagged(t *testing.T) {
+	f := indexFixture(t) // public.orders declared at 50M rows
+
+	fnd := indexFindingByCode(f,
+		indexCapture("ALTER TABLE public.orders ADD CONSTRAINT orders_pkey PRIMARY KEY (id)"),
+		"RS-INDEX-002")
+	if fnd == nil {
+		t.Fatal("ADD PRIMARY KEY produced no RS-INDEX-002 — a large-table PK addition passes clean")
+	}
+	if fnd.Severity != verdict.SeverityWarn {
+		t.Errorf("severity = %q, want warn", fnd.Severity)
+	}
+	if len(fnd.DependsOn) != 1 || fnd.DependsOn[0] != "public.orders.rows" {
+		t.Errorf("depends_on = %v, want [public.orders.rows]", fnd.DependsOn)
+	}
+	// 50M-row build extrapolated → an outage bucket, not the hydrated-rows instant.
+	if fnd.Estimate == nil || fnd.Estimate.Bucket == verdict.BucketInstant {
+		t.Errorf("expected an extrapolated build bucket, got %+v", fnd.Estimate)
+	}
+
+	// The bare (no CONSTRAINT name) table-constraint form also fires.
+	if indexFindingByCode(f, indexCapture("ALTER TABLE public.orders ADD PRIMARY KEY (id)"), "RS-INDEX-002") == nil {
+		t.Error("`ADD PRIMARY KEY (id)` (no constraint name) must also be flagged")
+	}
+}
+
+// TestAddUniqueConstraintFlagged: ADD CONSTRAINT ... UNIQUE builds a unique index
+// under ACCESS EXCLUSIVE too — the lock hazard is distinct from RS-DATA-014's
+// question of whether the data lets it build.
+func TestAddUniqueConstraintFlagged(t *testing.T) {
+	f := indexFixture(t)
+	fnd := indexFindingByCode(f,
+		indexCapture("ALTER TABLE public.orders ADD CONSTRAINT orders_email_key UNIQUE (email)"),
+		"RS-INDEX-002")
+	if fnd == nil {
+		t.Fatal("ADD UNIQUE produced no RS-INDEX-002 lock finding")
+	}
+	if fnd.Severity != verdict.SeverityWarn {
+		t.Errorf("severity = %q, want warn", fnd.Severity)
+	}
+	// The constraint NAME `orders_email_key` contains no UNIQUE token; the keyword
+	// is the constraint keyword, and the table must still resolve.
+	if len(fnd.DependsOn) != 1 || fnd.DependsOn[0] != "public.orders.rows" {
+		t.Errorf("depends_on = %v, want [public.orders.rows]", fnd.DependsOn)
+	}
+	// Bare `ADD UNIQUE (col)` (no constraint name) also fires.
+	if indexFindingByCode(f, indexCapture("ALTER TABLE public.orders ADD UNIQUE (email)"), "RS-INDEX-002") == nil {
+		t.Error("`ADD UNIQUE (email)` (no constraint name) must also be flagged")
+	}
+}
+
+// TestAddConstraintUsingIndexNotFlagged: the adopt form ADD PRIMARY KEY/UNIQUE
+// USING INDEX attaches a prebuilt index and holds the exclusive lock only
+// briefly — it is exactly what RS-INDEX-002's remediation recommends, so the
+// finding must not fire on its own fix.
+func TestAddConstraintUsingIndexNotFlagged(t *testing.T) {
+	f := indexFixture(t)
+	for _, sql := range []string{
+		"ALTER TABLE public.orders ADD PRIMARY KEY USING INDEX orders_pkey_idx",
+		"ALTER TABLE public.orders ADD CONSTRAINT orders_email_key UNIQUE USING INDEX orders_email_idx",
+	} {
+		if fnd := indexFindingByCode(f, indexCapture(sql), "RS-INDEX-002"); fnd != nil {
+			t.Errorf("USING INDEX adopt form must not fire RS-INDEX-002 (it is the remediation): %q -> %+v", sql, fnd)
+		}
+	}
+}
+
+// TestAddColumnPrimaryKeyNotFlagged: the COLUMN form `ADD COLUMN c type PRIMARY
+// KEY` adds a NEW column — a different operation from a table-constraint PK over
+// existing data — and must NOT be flagged as an existing-data index build.
+func TestAddColumnPrimaryKeyNotFlagged(t *testing.T) {
+	f := indexFixture(t)
+	if fnd := indexFindingByCode(f,
+		indexCapture("ALTER TABLE public.orders ADD COLUMN pk bigint PRIMARY KEY"),
+		"RS-INDEX-002"); fnd != nil {
+		t.Errorf("ADD COLUMN ... PRIMARY KEY must not fire RS-INDEX-002 (it is a new column), got %+v", fnd)
+	}
+}
+
+// TestAddPrimaryKeyUnqualifiedResolves: the table name is resolved like every
+// other analyzer, so `ADD PRIMARY KEY` on an unqualified table still reaches the
+// fixture's row count instead of reading zero and reporting instant.
+func TestAddPrimaryKeyUnqualifiedResolves(t *testing.T) {
+	f := indexFixture(t)
+	qualified := indexFindingByCode(f, indexCapture("ALTER TABLE public.orders ADD PRIMARY KEY (id)"), "RS-INDEX-002")
+	unqualified := indexFindingByCode(f, indexCapture("ALTER TABLE orders ADD PRIMARY KEY (id)"), "RS-INDEX-002")
+	if qualified == nil || unqualified == nil {
+		t.Fatalf("both forms must fire: qualified=%v unqualified=%v", qualified, unqualified)
+	}
+	if qualified.Estimate.Bucket != unqualified.Estimate.Bucket {
+		t.Errorf("unqualified form got a different bucket (%s vs %s) — it did not resolve to public.orders",
+			unqualified.Estimate.Bucket, qualified.Estimate.Bucket)
+	}
+}
+
+// TestReindexScopeTotals: REINDEX rebuilds EVERY index in its scope
+// sequentially, so the duration must bucket from the SUM of their bytes, not the
+// single largest — and REINDEX SCHEMA / DATABASE (previously silent) must produce
+// a finding at all.
+func TestReindexScopeTotals(t *testing.T) {
+	f, err := fixture.Parse([]byte(`rowshape_fixture: "1"
+meta: {id: t, engine: {name: postgres, version: "16"}}
+tables:
+  public.orders:
+    rows: {value: 10000000, confidence: exact}
+    columns:
+      id: {type: bigint, nullable: false}
+    indexes:
+      - {name: orders_a_idx, method: btree, columns: [id], bytes: 30000000000}
+      - {name: orders_b_idx, method: btree, columns: [id], bytes: 30000000000}
+  analytics.events:
+    rows: {value: 5000000, confidence: exact}
+    columns:
+      id: {type: bigint, nullable: false}
+    indexes:
+      - {name: events_idx, method: btree, columns: [id], bytes: 20000000000}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(sql string) *verdict.Finding {
+		return indexFindingByCode(f, indexCapture(sql), "RS-INDEX-020")
+	}
+	ev := func(fnd *verdict.Finding) (int64, int) {
+		m := fnd.Evidence.(map[string]any)
+		return m["index_bytes"].(int64), m["index_count"].(int)
+	}
+
+	// REINDEX TABLE sums BOTH of orders' indexes (60 GB), not just one (30 GB).
+	tbl := get("REINDEX TABLE public.orders")
+	if tbl == nil {
+		t.Fatal("REINDEX TABLE produced no finding")
+	}
+	if b, n := ev(tbl); b != 60000000000 || n != 2 {
+		t.Errorf("REINDEX TABLE totals = %d bytes / %d indexes, want 60000000000 / 2 (sum, not largest)", b, n)
+	}
+
+	// REINDEX SCHEMA public: only public.orders' indexes (60 GB), not analytics.
+	sch := get("REINDEX SCHEMA public")
+	if sch == nil {
+		t.Fatal("REINDEX SCHEMA produced no finding (was silent before)")
+	}
+	if b, n := ev(sch); b != 60000000000 || n != 2 {
+		t.Errorf("REINDEX SCHEMA public totals = %d / %d, want 60000000000 / 2", b, n)
+	}
+
+	// REINDEX DATABASE: every index across all schemas (80 GB / 3 indexes).
+	db := get("REINDEX DATABASE app")
+	if db == nil {
+		t.Fatal("REINDEX DATABASE produced no finding (was silent before)")
+	}
+	if b, n := ev(db); b != 80000000000 || n != 3 {
+		t.Errorf("REINDEX DATABASE totals = %d / %d, want 80000000000 / 3", b, n)
+	}
+}
+
 // TestUnqualifiedCreateIndexGetsTheSameEstimate is the rsindex twin of
 // rslock's TestUnqualifiedTableGetsTheSameEstimate.
 func TestUnqualifiedCreateIndexGetsTheSameEstimate(t *testing.T) {
@@ -272,8 +447,16 @@ func TestUnqualifiedReindexTableResolves(t *testing.T) {
 	if unqualified == nil {
 		t.Fatal("`REINDEX TABLE orders` produced NO RS-INDEX-020, but the qualified form did")
 	}
-	if unqualified.DependsOn[0] != qualified.DependsOn[0] {
-		t.Errorf("depends_on differs: unqualified=%v qualified=%v", unqualified.DependsOn, qualified.DependsOn)
+	// Both forms must resolve to the SAME table's largest index — proven by an
+	// identical byte-based estimate. (depends_on is deliberately empty on this
+	// finding: the estimate rests on index bytes, not the row count.)
+	qb, _ := qualified.Evidence.(map[string]any)
+	ub, _ := unqualified.Evidence.(map[string]any)
+	if qb["index_bytes"] != ub["index_bytes"] {
+		t.Errorf("resolved to different indexes: unqualified bytes=%v qualified bytes=%v", ub["index_bytes"], qb["index_bytes"])
+	}
+	if qualified.Estimate == nil || unqualified.Estimate == nil || qualified.Estimate.Bucket != unqualified.Estimate.Bucket {
+		t.Errorf("estimate buckets differ: unqualified=%+v qualified=%+v", unqualified.Estimate, qualified.Estimate)
 	}
 
 	// REINDEX INDEX still resolves by index name, unaffected by table resolution.

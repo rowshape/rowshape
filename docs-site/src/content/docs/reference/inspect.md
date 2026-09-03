@@ -25,4 +25,5 @@ rowshape inspect [rowshape.yaml] [flags]
 | --- | --- | --- |
 | `--fail-on-leak` | — | exit non-zero if any value-derived field is present (for CI) |
 | `--leaks` | — | enumerate every value-derived field in the fixture |
+| `--size` | — | report the fixture's size against the committable budget (RFC §3.3) |
 

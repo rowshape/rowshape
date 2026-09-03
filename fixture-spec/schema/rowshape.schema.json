@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rowshape.com/schema/fixture/v1",
   "title": "Rowshape Fixture",
-  "description": "A rowshape.yaml fixture, format version \"1\" (RFC-0001). A fixture contains no rows from a database — only statistics computed from them, each carrying the confidence it is known at. Unknown fields are ignored by readers (RFC §12); x_-prefixed keys are reserved for vendor extensions.",
+  "description": "A rowshape.yaml fixture, format version \"1\" (RFC-0001). A fixture contains no rows from a database \u2014 only statistics computed from them, each carrying the confidence it is known at. Unknown fields are ignored by readers (RFC \u00a712); x_-prefixed keys are reserved for vendor extensions.",
   "type": "object",
   "required": [
     "rowshape_fixture",
@@ -12,8 +12,9 @@
   "additionalProperties": true,
   "properties": {
     "rowshape_fixture": {
-      "description": "Major format version. A reader that does not understand this major MUST refuse (RFC §12).",
-      "const": "1"
+      "description": "Format version. A reader understands a whole major: it accepts \"1\" and any minor within it (\"1.4\") and MUST refuse a different major (RFC \u00a712).",
+      "type": "string",
+      "pattern": "^1(\\.[0-9]+)*$"
     },
     "meta": {
       "$ref": "#/$defs/meta"
@@ -24,11 +25,25 @@
       "additionalProperties": {
         "$ref": "#/$defs/table"
       }
+    },
+    "types": {
+      "type": "object",
+      "description": "Qualified user-defined type name (schema.type), exactly as it appears in a column's `type`, -> its definition (RFC-0001 \u00a76.7). Optional: a fixture whose columns use only built-in types omits it.",
+      "additionalProperties": {
+        "$ref": "#/$defs/userType"
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "description": "Extension name -> what the consumer needs to install it (RFC-0001 \u00a76.8). Only the extensions the read schema actually references, resolved from column types and index operator classes \u2014 never every extension merely installed on the source. Optional: a schema using no extensions omits it.",
+      "additionalProperties": {
+        "$ref": "#/$defs/extension"
+      }
     }
   },
   "$defs": {
     "confidence": {
-      "description": "The confidence a fact is known at, strictly ordered exact > measured > estimated > declared (RFC §7.1).",
+      "description": "The confidence a fact is known at, strictly ordered exact > measured > estimated > declared (RFC \u00a77.1).",
       "type": "string",
       "enum": [
         "exact",
@@ -65,7 +80,7 @@
               "type": "string"
             },
             "version": {
-              "description": "Engine major version — mandatory, because cost models are engine-version-conditional (RFC §9.1).",
+              "description": "Engine major version \u2014 mandatory, because cost models are engine-version-conditional (RFC \u00a79.1).",
               "type": "string",
               "minLength": 1
             }
@@ -90,7 +105,7 @@
       }
     },
     "intFact": {
-      "description": "An integer fact, as a {value, confidence, via} object or a bare scalar (shorthand for confidence:estimated, RFC §6.1).",
+      "description": "An integer fact, as a {value, confidence, via} object or a bare scalar (shorthand for confidence:estimated, RFC \u00a76.1).",
       "oneOf": [
         {
           "type": "integer"
@@ -147,7 +162,7 @@
       ]
     },
     "uniqueFact": {
-      "description": "Uniqueness. It MUST be exact or absent — a sample can never establish it (RFC §7.2). As an object, confidence is constrained to exact.",
+      "description": "Uniqueness. It MUST be exact or absent \u2014 a sample can never establish it (RFC \u00a77.2). As an object, confidence is constrained to exact.",
       "oneOf": [
         {
           "type": "boolean"
@@ -239,6 +254,21 @@
         "generated": {
           "type": "string"
         },
+        "identity": {
+          "enum": [
+            "always",
+            "by_default"
+          ],
+          "description": "Whether an identity column is GENERATED ALWAYS or BY DEFAULT (RFC-0001 \u00a76.1). An ALWAYS column rejects an explicit value in an INSERT unless the statement says OVERRIDING SYSTEM VALUE, so the two are not interchangeable. Absent means by_default, the permissive reading."
+        },
+        "generated_expression": {
+          "type": "string",
+          "description": "A STORED generated column's expression, verbatim (RFC-0001 \u00a76.1). The literal string \"opaque\" under privacy:strict; a consumer MUST NOT invent a replacement, which would compute values production never held."
+        },
+        "default": {
+          "type": "string",
+          "description": "The column's DEFAULT expression, verbatim (RFC-0001 \u00a76.1). It is what makes a NOT NULL column insertable without naming it; a consumer that drops it produces a target that rejects ordinary inserts production accepts. A nextval(...) default obliges the consumer to create that sequence. The literal string \"opaque\" under privacy:strict; a generated or identity column MUST NOT record one."
+        },
         "format": {
           "type": "string"
         },
@@ -262,7 +292,7 @@
       },
       "allOf": [
         {
-          "title": "RFC §6.1 — no range on text/bytea",
+          "title": "RFC \u00a76.1 \u2014 no range on text/bytea",
           "description": "A text or bytea column MUST NOT carry a range: its min and max would be REAL PRODUCTION VALUES, which is exactly what a fixture must never contain (INV-NO-ROWS). Numeric and temporal ranges are bounds; text ranges are data. Enforced here as well as in the Go conformance suite so a third-party emitter validating against the published schema alone cannot emit an invalid fixture.",
           "if": {
             "required": [
@@ -284,6 +314,58 @@
           }
         }
       ]
+    },
+    "userType": {
+      "type": "object",
+      "description": "An enum or domain a column is typed with (RFC-0001 \u00a76.7). A column's `type` is only a name; without a definition a consumer cannot recreate the type.",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "kind": {
+          "enum": [
+            "enum",
+            "domain"
+          ],
+          "description": "Which kind of user-defined type this is."
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "An enum's full vocabulary in DECLARATION ORDER, which is normative: engines order an enum by it. Withheld under privacy:strict."
+        },
+        "label_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of enum labels. Present even when `labels` is withheld, because cardinality is shape: a consumer can still build a type of the right size."
+        },
+        "base": {
+          "type": "string",
+          "description": "A domain's underlying type, itself possibly another domain (resolved transitively)."
+        },
+        "not_null": {
+          "type": "boolean",
+          "description": "A domain declared NOT NULL, which constrains every column using it."
+        },
+        "check": {
+          "type": "string",
+          "description": "A domain's constraint expression over the keyword VALUE, verbatim. The literal string \"opaque\" under privacy:strict; a consumer MUST NOT invent a replacement predicate."
+        }
+      }
+    },
+    "extension": {
+      "type": "object",
+      "description": "An engine extension the read schema depends on (RFC-0001 \u00a76.8). \u00a76.7 covers a type the database defines; this covers one that arrives with an extension and cannot be reconstructed from the catalog \u2014 a `citext` column names a type a fresh disposable database has never heard of. No version is recorded: the claim is that the schema needs citext, not a particular citext.",
+      "additionalProperties": true,
+      "properties": {
+        "schema": {
+          "type": "string",
+          "description": "Where the extension's objects live. It matters because a type name in a column can be schema-qualified: `ext.citext` and `public.citext` are different strings and only one resolves."
+        }
+      }
     }
   }
 }

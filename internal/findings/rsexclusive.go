@@ -54,15 +54,12 @@ func (rsExclusive) Analyze(f *fixture.Fixture, c *validate.Capture) []verdict.Fi
 				out = append(out, fnd)
 			}
 
-		case strings.HasPrefix(upper, "ALTER TABLE") && strings.Contains(upper, "ADD PRIMARY KEY"):
-			if fnd, ok := indexBuildFinding(f, c, i, clean, "PRIMARY KEY", hasVersion); ok {
-				out = append(out, fnd)
-			}
-
-		case strings.HasPrefix(upper, "ALTER TABLE") && strings.Contains(upper, "ADD UNIQUE"):
-			if fnd, ok := indexBuildFinding(f, c, i, clean, "UNIQUE", hasVersion); ok {
-				out = append(out, fnd)
-			}
+		// ADD PRIMARY KEY / ADD UNIQUE — bare or via ADD CONSTRAINT <name> — are
+		// index builds, not validating scans, and rsIndex owns them: it reports
+		// them as RS-INDEX-002 off parseAddIndexConstraint, which matches both
+		// spellings including the named `ADD CONSTRAINT <name> PRIMARY KEY (...)`
+		// form alembic and Rails emit. Reporting them here too would file two
+		// findings for one hazard on one statement.
 
 		case strings.HasPrefix(upper, "ALTER TABLE") && strings.Contains(upper, "ATTACH PARTITION"):
 			out = append(out, attachPartitionFinding(f, clean))
@@ -78,22 +75,6 @@ func (rsExclusive) Analyze(f *fixture.Fixture, c *validate.Capture) []verdict.Fi
 				}
 			case strings.Contains(upper, "FOREIGN KEY"):
 				if fnd, ok := validatingScanFinding(f, c, i, clean, "FOREIGN KEY", hasVersion); ok {
-					out = append(out, fnd)
-				}
-			// PRIMARY KEY and UNIQUE via ADD CONSTRAINT are index builds, not
-			// validating scans. The bare `ADD PRIMARY KEY` / `ADD UNIQUE` spellings
-			// are matched by the cases above, but `ADD CONSTRAINT <name> PRIMARY KEY
-			// (...)` reaches here — and it is the form alembic, Rails and most
-			// hand-written migrations emit, because it is the only one that can name
-			// the constraint. It used to fall through to a `continue` commented
-			// "handled above", which was true only of the bare spelling: the COMMON
-			// form produced no index-build finding at all.
-			case strings.Contains(upper, "PRIMARY KEY"):
-				if fnd, ok := indexBuildFinding(f, c, i, clean, "PRIMARY KEY", hasVersion); ok {
-					out = append(out, fnd)
-				}
-			case strings.Contains(upper, "UNIQUE"):
-				if fnd, ok := indexBuildFinding(f, c, i, clean, "UNIQUE", hasVersion); ok {
 					out = append(out, fnd)
 				}
 			}
@@ -134,35 +115,6 @@ func validatingScanFinding(f *fixture.Fixture, c *validate.Capture, idx int, cle
 	return fnd, true
 }
 
-// addPrimaryKeyFinding reports a PRIMARY KEY added to an existing table.
-func addPrimaryKeyFinding(f *fixture.Fixture, c *validate.Capture, idx int, clean string, hasVersion bool) (verdict.Finding, bool) {
-	table := resolveTable(f, alterTableTarget(clean))
-	if table == "" {
-		return verdict.Finding{}, false
-	}
-	tbl, ok := f.Tables[table]
-	if !ok {
-		return verdict.Finding{}, false
-	}
-	rows := tbl.Rows.Value
-
-	fnd := verdict.Finding{
-		Code:     "RS-LOCK-002",
-		Severity: verdict.SeverityWarn,
-		Title: fmt.Sprintf("ADD PRIMARY KEY on %s builds an index over %s rows under ACCESS EXCLUSIVE",
-			shortTable(table), humanCount(rows)),
-		Detail: "ADD PRIMARY KEY builds a unique index over every row and holds ACCESS EXCLUSIVE for the " +
-			"whole build, blocking reads and writes. There is no CONCURRENTLY form of ADD PRIMARY KEY — the " +
-			"safe route is to build the unique index concurrently first and then adopt it.",
-		Evidence:    map[string]any{"rows": rows},
-		DependsOn:   []string{table + ".rows"},
-		Remediation: remediation("RS-LOCK-002"),
-		Explain:     "rowshape explain RS-LOCK-002",
-	}
-	fnd.Estimate = estimateFor(c, idx, estimate.BTreeBuild, table, rows, tbl.Rows.Confidence, true, hasVersion)
-	return fnd, true
-}
-
 // dropIndexFinding reports a non-concurrent DROP INDEX.
 func dropIndexFinding(f *fixture.Fixture, clean, upper string) (verdict.Finding, bool) {
 	name := identAfter(clean, upper, "DROP INDEX")
@@ -170,14 +122,14 @@ func dropIndexFinding(f *fixture.Fixture, clean, upper string) (verdict.Finding,
 	if name == "" {
 		return verdict.Finding{}, false
 	}
-	table, _, found := findIndex(f, name, false)
+	table, _, found := findIndex(f, name)
 
 	on := "its table"
 	if found {
 		on = shortTable(table)
 	}
 	fnd := verdict.Finding{
-		Code:     "RS-INDEX-002",
+		Code:     "RS-INDEX-003",
 		Severity: verdict.SeverityWarn,
 		Title:    fmt.Sprintf("DROP INDEX %s takes ACCESS EXCLUSIVE on %s", name, on),
 		Detail: "A non-concurrent DROP INDEX takes ACCESS EXCLUSIVE on the TABLE, not just the index — so " +
@@ -185,8 +137,8 @@ func dropIndexFinding(f *fixture.Fixture, clean, upper string) (verdict.Finding,
 			"conflicting lock. The drop itself is fast, which is exactly why it looks harmless in a sandbox: " +
 			"the risk is the lock queue on a busy table, not the work.",
 		Evidence:    map[string]any{"index": name},
-		Remediation: remediation("RS-INDEX-002"),
-		Explain:     "rowshape explain RS-INDEX-002",
+		Remediation: remediation("RS-INDEX-003"),
+		Explain:     "rowshape explain RS-INDEX-003",
 	}
 	// Cite the table only when the index actually resolved; an unresolved name
 	// must not leave a dangling provenance path in a signed document.
@@ -219,4 +171,21 @@ func attachPartitionFinding(f *fixture.Fixture, clean string) verdict.Finding {
 		Remediation: remediation("RS-LOCK-003"),
 		Explain:     "rowshape explain RS-LOCK-003",
 	}
+}
+
+// findIndex locates an index by name, returning the owning table and the index.
+//
+// Sorted, not map order. Postgres permits the same index name in two schemas, so
+// an unsorted scan returned an arbitrary one of them — and the table name it
+// returns feeds the finding's DependsOn, making the recorded provenance unstable
+// too.
+func findIndex(f *fixture.Fixture, name string) (string, fixture.Index, bool) {
+	for _, tname := range sortedTableNames(f) {
+		for _, ix := range f.Tables[tname].Indexes {
+			if strings.EqualFold(ix.Name, name) {
+				return tname, ix, true
+			}
+		}
+	}
+	return "", fixture.Index{}, false
 }

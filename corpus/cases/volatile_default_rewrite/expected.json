@@ -2,6 +2,13 @@
   "description": "Volatile DEFAULT on ADD COLUMN rewrites all 5M rows under ACCESS EXCLUSIVE.",
   "verdict": "WARN",
   "findings": [
-    {"code": "RS-LOCK", "severity": "warn"}
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
   ]
 }

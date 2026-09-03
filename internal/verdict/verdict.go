@@ -78,7 +78,7 @@ type FixtureRef struct {
 }
 
 // Finding is a single result. Finding codes are permanent and namespaced by
-// class (RS-LOCK, RS-DATA, RS-CONSTRAINT, RS-INDEX, RS-PERF, RS-REVERSE) with a
+// class (RS-LOCK, RS-DATA, RS-CONSTRAINT, RS-INDEX, RS-PERF, RS-REVERSE, RS-APPLY) with a
 // numeric suffix, e.g. RS-LOCK-001 (INV-VERDICT-STABLE). Every finding declares
 // DependsOn and carries Confidence — the minimum across the fixture facts it
 // relied on (INV-CONFIDENCE-CAPPING). remediation is mandatory on every finding

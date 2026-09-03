@@ -1,0 +1,7 @@
+{
+  "description": "A statement the database rejects outright (42P01, undefined table) — RS-APPLY error/FAIL, carrying the SQLSTATE and the file and line, because no hazard analyzer can explain a statement that never ran.",
+  "verdict": "FAIL",
+  "findings": [
+    {"code": "RS-APPLY", "severity": "error"}
+  ]
+}

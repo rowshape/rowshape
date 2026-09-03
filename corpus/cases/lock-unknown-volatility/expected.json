@@ -1,7 +1,14 @@
 {
-  "description": "ADD COLUMN with a DEFAULT whose volatility rowshape cannot determine — RS-LOCK-001 WARN. The known-volatile list cannot be exhaustive (users define their own functions), so an unrecognized expression must resolve to 'I cannot tell' rather than to 'safe'. Before this change the case returned PASS on PG 16.",
+  "description": "ADD COLUMN whose DEFAULT is a USER-DEFINED function rowshape cannot classify — RS-LOCK-001 WARN with no estimate. The known-volatile list cannot be exhaustive (users define their own functions), so an unrecognized expression must resolve to 'I cannot tell' rather than to 'safe'. Before this change the case returned PASS on PG 16. RS-LOCK-010 also fires: the statement takes ACCESS EXCLUSIVE and sets no lock_timeout.",
   "verdict": "WARN",
   "findings": [
-    {"code": "RS-LOCK", "severity": "warn"}
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    },
+    {
+      "code": "RS-LOCK",
+      "severity": "warn"
+    }
   ]
 }

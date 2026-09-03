@@ -156,6 +156,14 @@ jobs:
           # Pinned, not `latest`. With `latest`, a new golangci-lint release adds
           # checks overnight and turns CI red on a commit that changed nothing —
           # which trains everyone to ignore the lint job. Bump this deliberately.
+          #
+          # A pin also has to be able to READ go.mod: golangci-lint refuses to start
+          # when the Go version it was BUILT with is lower than the module's `go`
+          # directive ("can't load config: the Go language version (go1.25) used to
+          # build golangci-lint is lower than the targeted Go version"). That is a
+          # lint job that never runs a single check, on a repo whose one-command
+          # verification is meant to be the thing you trust. Keep this pin and the
+          # go directive compatible when either moves.
           version: v2.12.2
 
   determinism-matrix:

@@ -52,8 +52,17 @@ the feature.
    this claim narrow and true rather than broad and false.
 2. **Every fact carries its confidence.** A fixture that doesn't know something is
    required to say so. §7.
-3. **Small enough to commit.** Under 100KB for a 200-table schema. If it doesn't
-   fit in a git diff, the format has failed.
+3. **Small enough to commit.** Under 320KB for a 200-table schema — about 1.2KB
+   per table. If it doesn't fit in a git diff, the format has failed.
+
+   This said 100KB in earlier drafts, which the emitter never met: a real
+   200-table pull is ~246KB, and the only test guarding the claim built its
+   fixture by hand with deliberately sparse facts. The number was corrected
+   rather than the emitter slimmed, because the weight is spread evenly across
+   `range`, `distinct`, `unique` and their confidences — every one load-bearing,
+   with no fat to cut that would not cost information the format exists to
+   carry. The PRINCIPLE is unchanged and is what the number serves: 320KB of
+   YAML is still a file a reviewer will read in a diff.
 4. **Readable by a human and an agent.** YAML, flat where possible, no
    compression, no binary blobs, no indirection the reader must resolve.
 5. **Deterministic.** Fixture + seed → identical database on any conformant
@@ -101,6 +110,12 @@ tables:
     constraints: [ ... ]       # §6.4
     indexes: [ ... ]           # §6.5
     references: [ ... ]        # §6.6
+
+types:
+  public.status: { ... }       # §6.7 (user-defined types, optional)
+
+extensions:
+  citext: { schema: public }   # §6.8 (required extensions, optional)
 ```
 
 `tables` is a map keyed by qualified name, not a list. Maps diff cleanly when a
@@ -119,6 +134,7 @@ table is added; lists do not.
         distinct: { value: 1200000, confidence: exact, via: unique_index }
         unique: { value: true, confidence: exact, via: constraint }
         generated: identity
+        identity: by_default          # by_default | always
 
       email:
         type: text
@@ -156,6 +172,49 @@ Both matter and they are not the same fact: a column that is nullable but 0% nul
 is the single most common source of a migration that passes staging and fails
 prod three weeks later, when the first null arrives.
 
+`default` is the column's DEFAULT expression, verbatim. It is what makes a NOT
+NULL column insertable without naming it, so a consumer that drops it produces a
+target which REJECTS ordinary inserts production accepts. It bears on the
+canonical migration-safety question too: whether `ADD COLUMN ... NOT NULL
+DEFAULT <expr>` rewrites the table turns on the default being non-volatile, and
+without this field nothing can say what defaults a table already has.
+
+A `default` naming a sequence through `nextval(...)` — how `serial` is spelled
+in the catalog — obliges a consumer to create that sequence, since it is a
+separate object the fixture does not otherwise carry. A generated or identity
+column MUST NOT record one: `generated` already says how the value arrives, and
+`DEFAULT` is not legal alongside `GENERATED`.
+
+Like a `CHECK` expression (§6.4), `default` is DDL: verbatim at `standard`, the
+literal `opaque` under `privacy:strict`. A consumer MUST NOT invent a
+replacement, and SHOULD report a withheld default on a NOT NULL column, since the
+target is then stricter than production.
+
+`generated` marks a column the database computes: `identity` or `stored`.
+
+For an identity column, `identity` records `always` or `by_default`. The
+difference is not cosmetic: an `ALWAYS` column REJECTS an explicit value in an
+INSERT unless the statement says `OVERRIDING SYSTEM VALUE`, so a migration that
+supplies one behaves differently on each. A consumer meeting `generated:
+identity` with no `identity` field SHOULD assume `by_default`, the permissive
+reading.
+
+For a `stored` column, `generated_expression` carries the generation expression
+verbatim. Without it the fixture says a column is computed but not from what, so
+a consumer rebuilds it as an ordinary column and the target then ACCEPTS an
+UPDATE production rejects with `column "total" can only be updated to DEFAULT`.
+It is DDL — the same class of information as a `CHECK` expression (§6.4) — and
+takes the same privacy treatment: verbatim at `standard`, the literal `opaque`
+under `privacy:strict`. A consumer MUST NOT invent a replacement expression: an
+invented one computes values production never held. Where the expression is
+`opaque` or absent, a consumer SHOULD create an ordinary column and REPORT that
+it did, since the target is then more permissive than production.
+
+A consumer that loads rows into an identity column with explicit values MUST
+advance that column's sequence past them. An identity sequence does not observe
+explicit inserts, so left alone it collides with the loaded rows on the first
+INSERT that omits the column — the ordinary way to insert into such a table.
+
 **Text columns MUST NOT emit `range`.** The min of a text column is a real value,
 verbatim. Only `length` statistics are permitted. The same applies to `bytea`.
 This is a MUST because it is the leak an emitter author will otherwise ship by
@@ -164,11 +223,30 @@ accident, having correctly reasoned that min/max is "just a statistic."
 ### 6.2 Numeric and temporal
 
 ```yaml
-        range: { min: 0, max: 4999, mean: 82.3 }
+        range: { min: 0, max: 4999, mean: 82.3, confidence: exact }
         histogram:                      # optional; privacy: standard+
           buckets: 16
           bounds: [0, 1, 2, 5, 12, ...]
 ```
+
+`range` carries a `confidence` describing how well the EXTREMES are known:
+`exact` when min/max were read over the whole column, `estimated` when they came
+from a sample. Emitters MUST record it, because a sampled range is a LOWER BOUND
+on the real spread, not the spread — a column whose true maximum was 60,000 was
+recorded from a sample as 59,773.
+
+This is the one place where a weak fact does damage that §7.4 capping cannot
+undo. Capping caps findings that EXIST; a sampled range makes a finding fail to
+EXIST — `ADD CONSTRAINT CHECK (customer_id <= 59900)` looked satisfiable against
+the sampled maximum, no conflict was reported, and the verdict was PASS while
+the engine refused the statement outright. A missing finding is a PASS nothing
+downstream can reach.
+
+So a consumer MUST NOT treat the ABSENCE of a range conflict as proof of safety
+when the range is `estimated`. It MUST report the uncertainty and name the
+command that resolves it. There is no threshold below which a bound is "far
+enough" outside a sampled range to be safe: a sample gives no bound on how far
+past its extremes the real data lies.
 
 Histograms exist for one reason: skew. A `tenant_id` where one tenant owns 80% of
 rows behaves completely differently under a partitioning migration than a uniform
@@ -231,14 +309,57 @@ expensive question in §7.2 is already answered by the DDL.
         method: btree
         columns: [email]
         unique: true
-        partial: "WHERE deleted_at IS NULL"
+        partial: "deleted_at IS NULL"
         bytes: 48000000
         bloat_estimate: 0.12
+      - name: users_lower_email_key      # an EXPRESSION index
+        method: btree
+        keys: ["lower(email)"]
+        unique: true
+      - name: users_cust_created         # a COVERING index
+        method: btree
+        columns: [customer_id, created_at]
+        include: [total]                 # payload, NOT part of the key
+        unique: true
 ```
 
 `bytes` and `bloat_estimate` exist because index rebuild time is a first-order
 input to lock duration, and lock duration is the finding people actually care
 about.
+
+`keys` carries the index's key expressions as SQL text, in order, and MUST be
+present when any key is an EXPRESSION rather than a plain column. `columns`
+cannot describe such an index — a unique index on `lower(email)` has no column
+key at all — so an emitter that records only `columns` describes it as having no
+keys, and a consumer rebuilding the schema drops it. That is not a lost
+statistic: a UNIQUE index present in production and absent from the target is a
+constraint no longer enforced, so a migration that violates it can be reported
+as safe.
+
+`keys` MUST also be present when a key carries anything a bare column name
+cannot express — an ordering (`DESC`, `NULLS FIRST`), a collation, or a
+non-default operator class. These are not decoration. An index declared
+`USING gin (email gin_trgm_ops)` and rebuilt from the column name alone does not
+build at all (`data type text has no default operator class for access method
+"gin"`), so the target silently lacks an index production has. For an index whose
+keys are plain ascending columns on their default operator class, `keys` SHOULD
+be omitted, since it would merely restate `columns`.
+
+`include` carries a covering index's INCLUDE payload — columns stored in the
+index but NOT part of its key. It MUST be recorded separately from `columns`,
+and a consumer MUST NOT fold it into the key. The key is what a UNIQUE index
+ENFORCES: recording `UNIQUE (customer_id, created_at) INCLUDE (total)` as unique
+on all three describes a strictly weaker constraint, so the target accepts rows
+production rejects and a migration that violates the real two-column uniqueness
+is reported as safe.
+
+`partial` is the predicate alone, without the leading `WHERE`. A consumer MUST
+reproduce a partial index WITH its predicate: the predicate is what gives the
+index its scope, and a partial unique index (`UNIQUE (email) WHERE deleted_at IS
+NULL`, the standard soft-delete pattern) enforces something a plain one does not.
+Where `privacy:strict` has replaced the predicate with `opaque` (§6.4), a
+consumer MUST NOT invent one — a guessed predicate enforces a different rule than
+production — and SHOULD report the index as unreproducible instead.
 
 ### 6.6 References and fan-out
 
@@ -246,7 +367,9 @@ about.
     references:
       - column: user_id
         to: public.users.id
+        name: orders_user_id_fkey
         on_delete: cascade
+        on_update: no_action
         fanout: { mean: 8.4, p50: 3, p95: 41, max: 12902, confidence: measured }
         orphan_fraction: { value: 0.0, confidence: exact, via: scan }
 ```
@@ -260,6 +383,166 @@ distribution, not merely the mean.
 constraint — common where constraints were added `NOT VALID`, or dropped and
 never restored. If nonzero, a migration adding `FOREIGN KEY ... VALIDATE` will
 fail, and the fixture is the only thing that knows.
+
+`name` is the constraint's own name. A COMPOSITE foreign key is recorded as one
+entry per column pair — so `fanout` stays per-column — and the shared `name` is
+what lets a consumer group them back into the single constraint they came from.
+Without it, `FOREIGN KEY (a, b) REFERENCES t (x, y)` is indistinguishable from
+two independent single-column keys, which constrain something else entirely. A
+migration naming the constraint (`DROP CONSTRAINT orders_user_id_fkey`) also has
+something to match against.
+
+`on_update` is recorded for the same reason `on_delete` is: a migration that
+rewrites parent keys behaves differently under `CASCADE` than under `RESTRICT`.
+`validated: false` marks a `NOT VALID` key.
+
+A consumer MUST recreate the recorded references as real foreign keys, with
+their referential actions, and MUST NOT validate one recorded `validated:
+false` — such a key is not enforced against existing rows, so validating it
+makes the target reject data production holds. A reference the target does not
+enforce is a rule a migration can break and be certified for: an insert of a row
+whose parent does not exist was reported as safe while the source database
+refused it. Constraints SHOULD be added AFTER rows are loaded, which removes any
+dependency on table load order and is what makes self-referencing keys and
+cycles between tables work.
+
+### 6.7 User-defined types
+
+```yaml
+types:
+  public.order_status:
+    kind: enum
+    labels: [pending, paid, shipped]   # declaration order is significant
+    label_count: 3
+  public.positive_int:
+    kind: domain
+    base: integer
+    not_null: false
+    check: (VALUE > 0)                  # verbatim; opaque under privacy:strict
+```
+
+`types` is an OPTIONAL top-level map, keyed by the schema-qualified type name
+exactly as it appears in a column's `type` — so a column and its definition join
+by string equality. A fixture whose columns use only built-in types omits the
+section entirely.
+
+It exists because a column's `type` is only a NAME. For `integer` that is
+sufficient: every engine already has one. For `public.order_status` it is not,
+and a consumer reconstructing a database from the fixture has nothing to create.
+An emitter MUST define every enum and domain its columns reference; a consumer
+that cannot resolve a column's type MUST fail rather than substitute one, because
+a substituted type accepts values the real column would have rejected.
+
+`kind` is `enum` or `domain`.
+
+For an enum, `labels` is the full ordered vocabulary and `label_count` its size.
+The ORDER is normative: engines order an enum by declaration, so a migration that
+compares or sorts the column depends on it. `label_count` MUST be present even
+when `labels` is not, because cardinality is shape: a consumer that knows only
+the count can still build a type of the right size, whereas one with neither
+cannot build the type at all.
+
+For a domain, `base` is the underlying type — itself possibly another domain,
+which resolves transitively — with `not_null` and a verbatim `check` over the
+keyword `VALUE`.
+
+Labels and a domain's `check` are DDL, the same class of information as a column
+name or a table `CHECK` (§6.4), and are emitted at `standard`. Under
+`privacy:strict` they are withheld: `labels` is dropped (leaving `label_count`)
+and `check` becomes `opaque`, exactly as a table CHECK does. A consumer MUST NOT
+invent a predicate to replace an opaque `check` — an invented constraint would
+reject data production accepted.
+
+Types that are neither enum nor domain (composite, range, and engine-specific
+types) are outside this version. An emitter MUST NOT guess a definition for one,
+and a consumer meeting an unresolvable type MUST report it by name.
+
+### 6.8 Required extensions
+
+```yaml
+extensions:
+  citext:  { schema: public }
+  pg_trgm: { schema: public }
+  vector:  { schema: ext }
+```
+
+§6.7 covers a type the database itself defines. This covers the other case: a
+type that arrives with an ENGINE EXTENSION and cannot be reconstructed from the
+catalog at all. A `citext` column names something a freshly created disposable
+database has never heard of, so the DDL fails with `type "citext" does not
+exist` and validation cannot run on the schema at all — the same for `hstore`,
+`ltree`, PostGIS `geometry`, and pgvector's `vector`.
+
+An extension requirement can also hide where no column type mentions it: an
+index declared `USING gin (email gin_trgm_ops)` needs `pg_trgm` because of its
+OPERATOR CLASS (§6.5), not because of any column's type.
+
+An emitter MUST record every extension the read schema actually references —
+resolved from the types its columns carry and the operator classes its indexes
+use — and MUST NOT record extensions merely INSTALLED on the source. Recording
+all of them would make a fixture demand PostGIS of a disposable server for a
+schema that never touches it. An extension present in every database from
+initialization (`plpgsql`) carries no information and SHOULD be omitted.
+
+`schema` is where the extension's objects live, and matters because a type name
+in a column can be schema-qualified: `ext.citext` and `public.citext` are
+different strings, and only one resolves.
+
+No VERSION is recorded. The claim is "this schema needs citext", not "it needs
+citext 1.6" — pinning would make a fixture refuse to hydrate on a server that
+ships a different version, for no gain, since the target only has to provide the
+type.
+
+A consumer MUST install the recorded extensions before creating types or tables,
+and MUST fail loudly, naming the extension, when one is unavailable. It MUST NOT
+substitute a built-in type for a missing extension type: `citext` is
+case-insensitive and `text` is not, so the substitution changes what the target
+enforces and turns a loud failure into a wrong verdict.
+
+An extension name is schema, not data, so `extensions` is emitted at every
+privacy level and is not a `--leaks` finding (§8.3).
+
+### 6.9 Partitioned tables
+
+```yaml
+  public.events:
+    rows: { value: 412000000, confidence: estimated }
+    bytes: 431000000000        # the WHOLE tree, not the parent's own storage
+    partitions:
+      count: 90
+      strategy: range          # range | list | hash
+      key: occurred_at
+      skew: 0.31
+```
+
+A partitioned parent declares its partitioning; individual partitions are NOT
+recorded as tables of their own. Ninety partitions would be ninety near-identical
+table entries, and what changes a migration's behaviour is the count, the
+strategy, and the skew — not each partition's bounds.
+
+`key` is the partition key: the column list or expression inside `PARTITION BY
+<strategy> (...)`, without the strategy word. `count`, `strategy` and `skew`
+DESCRIBE a partitioned table; `key` is what lets one be REBUILT. Without it a
+consumer has nothing to declare `PARTITION BY` with, so it recreates the parent
+as an ordinary table — and an ordinary table accepts `CREATE INDEX
+CONCURRENTLY`, which Postgres refuses outright on a partitioned parent. A
+migration that cannot run at all in production is then reported as safe.
+
+`bytes` on a partitioned parent MUST be the total across the whole partition
+tree. The engine's own relation-size function measures the parent's storage,
+which is zero, so a naive emitter reports `bytes: 0` for a 400GB table and every
+size-driven duration estimate (§9.1) extrapolates from nothing — understating
+precisely the migrations whose cost matters most. `rows` follows the same rule
+for the same reason.
+
+A consumer MUST recreate a partitioned parent as a partitioned table. It is NOT
+required to reproduce production's bounds: bounds are not recorded, and the
+behaviour that matters does not depend on them. It SHOULD reproduce the `count`
+where the strategy allows this mechanically — `hash` does, through modulus and
+remainder — and where it cannot, it MUST report the difference, because a DDL
+statement on a parent takes locks on every partition and a target standing one
+partition in for ninety understates that. Whatever partitions it creates MUST
+span the key space, since a row matching no partition fails to load at all.
 
 ## 7. Confidence
 
@@ -569,9 +852,12 @@ eventually mistake the output for real data.
    correlation matters for composite unique constraints, where independent
    generation understates collisions. Defer to v2, or add an optional
    `correlations` block now?
-2. **Partitioned tables.** Parent only, or every partition? Partition count and
-   per-partition skew change lock behavior materially. Leaning: parent declares
-   `partitions: { count, strategy, skew }`, no per-partition entries.
+2. **Partitioned tables.** ~~Parent only, or every partition?~~ **Resolved:**
+   parent only, and normative in §6.9. The parent declares
+   `partitions: { count, strategy, key, skew }` with no per-partition entries.
+   `key` was added after the parent-only decision proved insufficient to REBUILD
+   a partitioned table — count and strategy describe one, the key is what
+   declares it.
 3. **Does `bloat_estimate` belong in a portable spec,** or is it Postgres trivia
    that will embarrass us at MySQL?
 4. **HLL parameters.** Precision 14 (~1.6% error, 16KB state) vs 16 (~0.4%, 64KB)?

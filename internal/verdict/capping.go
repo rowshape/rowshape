@@ -87,15 +87,37 @@ func (e *Engine) Cap(want string, f Finding) (string, Finding) {
 	return got, f
 }
 
-// ResolveCommand returns the command that would raise the weakest declared
+// ResolveCommand returns the instruction that would raise the weakest declared
 // dependency to a certifying confidence — the "here is how to turn this WARN into
-// a PASS" string (RFC §7.4, e.g. `rowshape pull --exact public.users.email`).
+// a PASS" string (RFC §7.4).
+//
+// It names `pull --exact` and the fact that needs raising, but is deliberately NOT
+// a bare `rowshape pull --exact <target>`: `--exact` is a boolean that re-profiles
+// the WHOLE source, and `pull` takes a connection URL, not a column selector. The
+// old form `rowshape pull --exact public.users.email` fed the selector in where a
+// DSN belongs, so an agent that ran it verbatim — as init --agent's rule tells it
+// to — got a connection-parse tool error, not a re-pull. This phrasing is honest
+// about what to run (an exact re-pull of the source) and why (to raise this fact).
 func (e *Engine) ResolveCommand(deps []string) string {
+	// Only for a finding whose facts do NOT already certify. This is the "here is
+	// how to turn this WARN into a PASS" string, so on a finding resting on exact
+	// facts it is not merely redundant, it is false: it tells the reader a fact
+	// needs raising when nothing does.
+	//
+	// The capping path only reaches here after a downgrade, so the guard is a
+	// no-op there. The MCP surface asks for one on EVERY finding, and without it
+	// an RS-INDEX-002 resting on an exact row count told the agent to re-profile
+	// the source to raise a fact that was already exact — advice that costs a full
+	// production re-pull and changes nothing, delivered to the surface the agent
+	// loop is built on.
+	if Ceiling(e.DependencyConfidence(deps)) != VerdictWarn {
+		return ""
+	}
 	target := e.weakestTarget(deps)
 	if target == "" {
 		return ""
 	}
-	return "rowshape pull --exact " + target
+	return "rowshape pull --exact <source-url> (re-profiles the source, raising " + target + " to exact)"
 }
 
 // capToCeiling downgrades a PASS that exceeds the ceiling to WARN; it never
@@ -109,7 +131,7 @@ func capToCeiling(want, ceiling string) string {
 
 // factConfidence resolves one fixture fact path to its confidence, reading it
 // from the fixture. Supported paths: `<schema>.<table>.rows`,
-// `<schema>.<table>.<column>.{unique,null_fraction,distinct}`. An unresolvable
+// `<schema>.<table>.<column>.{unique,null_fraction,distinct,range}`. An unresolvable
 // path yields absent — the weakest reading — so an unknown dependency can never
 // license PASS.
 func (e *Engine) factConfidence(path string) fixture.Confidence {
@@ -183,6 +205,21 @@ func (e *Engine) factConfidence(path string) fixture.Confidence {
 			return absent
 		}
 		return c.Distinct.Confidence
+	case "range":
+		// `range` used to have no case here, so a finding resting on the profiled
+		// extremes resolved to `absent` — recorded as D-010, on the reasoning that
+		// fixture.Range carried no confidence at all. It does now (§6.1), because a
+		// SAMPLED range understates the extremes and a finding that keys off them
+		// then fails to fire at all.
+		if c.Range == nil {
+			return absent
+		}
+		if c.Range.Confidence == "" {
+			// A fixture written before the field. Absent, not estimated: the weakest
+			// reading is the only safe one for a fact whose provenance is unknown.
+			return absent
+		}
+		return c.Range.Confidence
 	}
 	return absent
 }

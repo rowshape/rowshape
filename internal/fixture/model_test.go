@@ -2,6 +2,7 @@ package fixture
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -337,3 +338,120 @@ func keys[V any](m map[string]V) []string {
 }
 
 var _ = yaml.Marshal
+
+// TestUserTypesRoundTrip: the types section survives a YAML round trip, including
+// the x_ vendor extensions RFC §12 requires be preserved.
+func TestUserTypesRoundTrip(t *testing.T) {
+	src := `rowshape_fixture: "1"
+meta:
+  id: f
+  engine: {name: postgres, version: "16"}
+types:
+  z.mood:
+    kind: enum
+    labels: [sad, ok, happy]
+    label_count: 3
+    x_vendor: keep-me
+  z.positive_int:
+    kind: domain
+    base: integer
+    not_null: true
+    check: (VALUE > 0)
+tables: {}
+`
+	var f Fixture
+	if err := yaml.Unmarshal([]byte(src), &f); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	mood, ok := f.Types["z.mood"]
+	if !ok {
+		t.Fatal("z.mood missing after unmarshal")
+	}
+	if mood.Kind != "enum" || mood.LabelCount != 3 {
+		t.Errorf("enum decoded as kind=%q label_count=%d", mood.Kind, mood.LabelCount)
+	}
+	if got := strings.Join(mood.Labels, ","); got != "sad,ok,happy" {
+		t.Errorf("labels = %q; declaration order is significant and must be preserved", got)
+	}
+	if mood.X["x_vendor"] != "keep-me" {
+		t.Errorf("vendor extension not preserved: %v", mood.X)
+	}
+	d := f.Types["z.positive_int"]
+	if d.Kind != "domain" || d.Base != "integer" || !d.NotNull || d.Check != "(VALUE > 0)" {
+		t.Errorf("domain decoded wrong: %+v", d)
+	}
+}
+
+// TestEffectiveLabelsIsTheSharedContract: the DDL emitter and the synthesis engine
+// both build enum values from this, so it must be deterministic and agree with
+// itself. A redacted vocabulary (privacy:strict) yields placeholders sized by the
+// count; a present vocabulary is returned verbatim.
+func TestEffectiveLabelsIsTheSharedContract(t *testing.T) {
+	real := UserType{Kind: "enum", Labels: []string{"a", "b"}, LabelCount: 2}
+	if got := strings.Join(real.EffectiveLabels(), ","); got != "a,b" {
+		t.Errorf("present vocabulary altered: %q", got)
+	}
+	redacted := UserType{Kind: "enum", LabelCount: 3}
+	if got := strings.Join(redacted.EffectiveLabels(), ","); got != "label_0,label_1,label_2" {
+		t.Errorf("redacted vocabulary = %q, want label_0..2", got)
+	}
+	if got := redacted.EffectiveLabels(); len(got) != len(redacted.EffectiveLabels()) {
+		t.Error("EffectiveLabels is not stable across calls")
+	}
+	if l := (UserType{Kind: "domain", Base: "integer"}).EffectiveLabels(); l != nil {
+		t.Errorf("a domain returned labels: %v", l)
+	}
+	if l := (UserType{Kind: "enum"}).EffectiveLabels(); l != nil {
+		t.Errorf("an enum with neither labels nor count returned %v, want nil", l)
+	}
+}
+
+// TestResolveTypeFollowsDomains: a domain reduces to its base; nesting is followed;
+// a cycle in a malformed fixture terminates instead of hanging the generator.
+func TestResolveTypeFollowsDomains(t *testing.T) {
+	f := &Fixture{Types: map[string]UserType{
+		"z.outer": {Kind: "domain", Base: "z.inner"},
+		"z.inner": {Kind: "domain", Base: "bigint"},
+		"z.mood":  {Kind: "enum", Labels: []string{"a"}, LabelCount: 1},
+		"z.loopA": {Kind: "domain", Base: "z.loopB"},
+		"z.loopB": {Kind: "domain", Base: "z.loopA"},
+	}}
+	if got := f.ResolveType("z.outer"); got != "bigint" {
+		t.Errorf("nested domain resolved to %q, want bigint", got)
+	}
+	if got := f.ResolveType("integer"); got != "integer" {
+		t.Errorf("built-in type was rewritten to %q", got)
+	}
+	if got := f.ResolveType("z.mood"); got != "z.mood" {
+		t.Errorf("enum was resolved away to %q; only domains have a base", got)
+	}
+	// Must terminate; the exact value is unimportant.
+	_ = f.ResolveType("z.loopA")
+}
+
+// TestEnumLabelsReportsEnumnessSeparately: an enum whose vocabulary was withheld is
+// still an enum. If the boolean were tied to the label list, the caller would fall
+// through to a generic string, which is not a member of the type.
+func TestEnumLabelsReportsEnumnessSeparately(t *testing.T) {
+	f := &Fixture{Types: map[string]UserType{
+		"z.mood": {Kind: "enum", LabelCount: 2},
+		"z.dom":  {Kind: "domain", Base: "integer"},
+	}}
+	labels, isEnum := f.EnumLabels("z.mood")
+	if !isEnum {
+		t.Error("a redacted enum did not report as an enum")
+	}
+	if len(labels) != 2 {
+		t.Errorf("got %d placeholder labels, want 2", len(labels))
+	}
+	if _, isEnum := f.EnumLabels("z.dom"); isEnum {
+		t.Error("a domain reported as an enum")
+	}
+	if _, isEnum := f.EnumLabels("integer"); isEnum {
+		t.Error("a built-in type reported as an enum")
+	}
+	var nilF *Fixture
+	if _, isEnum := nilF.EnumLabels("z.mood"); isEnum {
+		t.Error("nil fixture reported an enum")
+	}
+}

@@ -30,7 +30,7 @@ func fixtureWithIndex(engineVersion string) *fixture.Fixture {
 // (the index's on-disk bytes). So it is enforced at the construction site.
 func TestReindexHonorsTheEngineVersionGate(t *testing.T) {
 	t.Run("no engine version: no estimate", func(t *testing.T) {
-		fnd, ok := reindexFinding(fixtureWithIndex(""), "idx_big", false, false)
+		fnd, ok := reindexFinding(fixtureWithIndex(""), "idx_big", reindexIndex, false)
 		if !ok {
 			t.Fatal("the finding itself must still be produced — the lock is real regardless")
 		}
@@ -43,7 +43,7 @@ func TestReindexHonorsTheEngineVersionGate(t *testing.T) {
 	})
 
 	t.Run("engine version present: estimate", func(t *testing.T) {
-		fnd, ok := reindexFinding(fixtureWithIndex("16"), "idx_big", false, true)
+		fnd, ok := reindexFinding(fixtureWithIndex("16"), "idx_big", reindexIndex, true)
 		if !ok {
 			t.Fatal("finding not produced")
 		}
@@ -60,7 +60,7 @@ func TestReindexHonorsTheEngineVersionGate(t *testing.T) {
 // row count put a fact the conclusion does not rest on into a signed document —
 // the same false-provenance trail indexUniqueFinding explicitly refuses.
 func TestReindexProvenanceCitesBytesNotRows(t *testing.T) {
-	fnd, ok := reindexFinding(fixtureWithIndex("16"), "idx_big", false, true)
+	fnd, ok := reindexFinding(fixtureWithIndex("16"), "idx_big", reindexIndex, true)
 	if !ok {
 		t.Fatal("finding not produced")
 	}
@@ -69,14 +69,16 @@ func TestReindexProvenanceCitesBytesNotRows(t *testing.T) {
 			t.Errorf("DependsOn cites %q, but this estimate rests on the index's bytes, not the row count", dep)
 		}
 	}
-	found := false
-	for _, dep := range fnd.DependsOn {
-		if strings.Contains(dep, "idx_big") && strings.HasSuffix(dep, ".bytes") {
-			found = true
-		}
+	// An EMPTY depends_on is the intended encoding, not an oversight: index bytes
+	// come from an exact catalog read (pg_total_relation_size), there is no
+	// factConfidence path for them, and the engine treats no declared fact as
+	// exact — the same thing RS-INDEX-010 does when it deliberately declines one.
+	// Citing a fixture fact the finding never reads is what this guards against.
+	if len(fnd.DependsOn) != 0 {
+		t.Errorf("DependsOn should be empty (the bytes are exact and carry no fact confidence), got %v", fnd.DependsOn)
 	}
-	if !found {
-		t.Errorf("DependsOn must cite the index bytes it actually rests on, got %v", fnd.DependsOn)
+	if fnd.Estimate == nil || fnd.Estimate.Model != "reindex_bytes" {
+		t.Errorf("the estimate must still declare the bytes model it rests on, got %+v", fnd.Estimate)
 	}
 }
 
@@ -91,7 +93,7 @@ func TestReindexProvenanceCitesBytesNotRows(t *testing.T) {
 // unmeasured number presented as a measurement inside a document meant to be
 // attested.
 func TestReindexOmitsUnmeasuredBloat(t *testing.T) {
-	fnd, ok := reindexFinding(fixtureWithIndex("16"), "idx_big", false, true)
+	fnd, ok := reindexFinding(fixtureWithIndex("16"), "idx_big", reindexIndex, true)
 	if !ok {
 		t.Fatal("finding not produced")
 	}
@@ -116,7 +118,7 @@ func TestReindexReportsMeasuredBloat(t *testing.T) {
 	tbl.Indexes[0].BloatEstimate = &b
 	f.Tables["public.t"] = tbl
 
-	fnd, ok := reindexFinding(f, "idx_big", false, true)
+	fnd, ok := reindexFinding(f, "idx_big", reindexIndex, true)
 	if !ok {
 		t.Fatal("finding not produced")
 	}

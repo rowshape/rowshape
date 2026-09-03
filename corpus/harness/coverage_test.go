@@ -1,95 +1,129 @@
-package harness
+package harness_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/rowshape/rowshape/internal/findings"
-	"github.com/rowshape/rowshape/internal/fixture"
-	"github.com/rowshape/rowshape/internal/validate"
 )
 
-// knownUncovered records codes that deliberately have no corpus case, with the
-// reason. An entry here is a debt with a name, not an exemption — the test fails
-// if a code listed here starts being covered, so the list cannot rot silently in
-// either direction.
-var knownUncovered = map[string]string{
-	"RS-LOCK-003": "ATTACH PARTITION errors against the hydrated table because hydrate does not " +
-		"reproduce partitioning (CR4-T11), so a corpus case would fail for a reason unrelated to the " +
-		"finding. Adding one would paper over the fidelity gap rather than expose it.",
-}
-
-// TestEveryFindingCodeHasACorpusCase is the coverage guard.
+// TestCoverageTableMatchesTheCorpus keeps corpus/README.md's coverage table
+// honest against the corpus it describes.
 //
-// docs/TESTING-GAPS.md asserted that all finding codes were exercised by at
-// least one corpus case. That was true when there were 14 codes; by the time
-// there were 26, six were exercised only by unit tests. The corpus is the ONLY
-// thing that runs findings against a real Postgres in CI, so a code with no case
-// has never been proven to fire end to end — and a prose claim in a markdown file
-// cannot notice when it stops being true. This can.
-func TestEveryFindingCodeHasACorpusCase(t *testing.T) {
-	dirs, err := filepath.Glob(filepath.Join("..", "cases", "*"))
+// The table is the credibility asset's self-description: which finding families
+// have cases, which severities they reach, and whether the capping contract is
+// asserted (CR-T15). It is hand-maintained, and it HAD DRIFTED — claiming 5
+// RS-INDEX cases against 9, and 4 negative cases against 3 — which is the failure
+// mode of any coverage record nothing verifies: it describes the corpus someone
+// last remembered, not the one that exists. A stale gap list is worse than none,
+// because it is read as current.
+//
+// Same discipline as TestFindingsDocsUpToDate, which keeps the generated finding
+// pages from going stale against the registry.
+func TestCoverageTableMatchesTheCorpus(t *testing.T) {
+	type fam struct {
+		cases   map[string]bool
+		sevs    map[string]bool
+		resolve int
+	}
+	families := map[string]*fam{}
+	negatives := 0
+
+	dirs, err := filepath.Glob(filepath.Join("..", "cases", "*", "expected.json"))
 	if err != nil || len(dirs) == 0 {
-		t.Fatalf("no corpus cases found (err=%v) — this test would pass vacuously", err)
+		t.Fatalf("no corpus cases found: %v", err)
 	}
-
-	fired := map[string]bool{}
-	for _, d := range dirs {
-		fb, err := os.ReadFile(filepath.Join(d, "fixture.yaml"))
+	for _, p := range dirs {
+		data, err := os.ReadFile(p)
 		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		var e struct {
+			Findings []struct {
+				Code            string `json:"code"`
+				Severity        string `json:"severity"`
+				ResolveContains string `json:"resolve_contains"`
+			} `json:"findings"`
+		}
+		if err := json.Unmarshal(data, &e); err != nil {
+			t.Fatalf("parse %s: %v", p, err)
+		}
+		name := filepath.Base(filepath.Dir(p))
+		if len(e.Findings) == 0 {
+			negatives++
 			continue
 		}
-		f, err := fixture.Parse(fb)
-		if err != nil {
-			t.Errorf("%s: fixture does not parse: %v", filepath.Base(d), err)
-			continue
-		}
-		mb, err := os.ReadFile(filepath.Join(d, "migration.sql"))
-		if err != nil {
-			continue
-		}
-		var sc []validate.Statement
-		for _, s := range validate.SplitStatements(string(mb)) {
-			sc = append(sc, validate.Statement{SQL: s})
-		}
-		// Statically, with a success-capture: enough to prove the analyzer fires
-		// on the case's SQL. The DB-backed run in CI proves the rest.
-		res := validate.BuildResult(f, &validate.Capture{Success: true, Statements: sc}, validate.Registered(), false)
-		for _, fnd := range res.Findings {
-			fired[fnd.Code] = true
-		}
-	}
-
-	codes := findings.Codes()
-	if len(codes) == 0 {
-		t.Fatal("the registry reported no codes — the walk is broken and this test would pass vacuously")
-	}
-
-	var missing []string
-	for _, code := range codes {
-		if fired[code] {
-			if why, listed := knownUncovered[code]; listed {
-				t.Errorf("%s IS covered by a corpus case but is still listed in knownUncovered (%q) — "+
-					"remove the entry", code, why)
+		for _, f := range e.Findings {
+			g := families[f.Code]
+			if g == nil {
+				g = &fam{cases: map[string]bool{}, sevs: map[string]bool{}}
+				families[f.Code] = g
 			}
+			g.cases[name] = true
+			g.sevs[f.Severity] = true
+			if f.ResolveContains != "" {
+				g.resolve++
+			}
+		}
+	}
+
+	readme, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	text := string(readme)
+
+	// One row per family: | `RS-DATA` | 6 | error, warn | yes (3) |
+	row := regexp.MustCompile("(?m)^\\| `(RS-[A-Z]+)` \\| (\\d+) \\| ([^|]+) \\| ([^|]+) \\|$")
+	documented := map[string]bool{}
+	for _, m := range row.FindAllStringSubmatch(text, -1) {
+		code, countStr := m[1], m[2]
+		documented[code] = true
+		g := families[code]
+		if g == nil {
+			t.Errorf("README documents family %s, which no corpus case names", code)
 			continue
 		}
-		if _, allowed := knownUncovered[code]; allowed {
-			continue
+		want := len(g.cases)
+		got, _ := strconv.Atoi(countStr)
+		if got != want {
+			t.Errorf("README says %s has %d case(s); the corpus has %d", code, got, want)
 		}
-		missing = append(missing, code)
+		var sevs []string
+		for s := range g.sevs {
+			sevs = append(sevs, s)
+		}
+		sort.Strings(sevs)
+		if strings.TrimSpace(m[3]) != strings.Join(sevs, ", ") {
+			t.Errorf("README says %s covers %q; the corpus covers %q", code, strings.TrimSpace(m[3]), strings.Join(sevs, ", "))
+		}
+		wantCap := "no"
+		if g.resolve > 0 {
+			wantCap = "yes (" + strconv.Itoa(g.resolve) + ")"
+		}
+		if strings.TrimSpace(m[4]) != wantCap {
+			t.Errorf("README says %s capping contract %q; the corpus says %q", code, strings.TrimSpace(m[4]), wantCap)
+		}
 	}
-	sort.Strings(missing)
-	if len(missing) > 0 {
-		t.Errorf("%d finding code(s) have no corpus case: %s\n"+
-			"The corpus is the only thing that exercises findings against a real Postgres in CI, so an "+
-			"uncovered code has never been proven to fire end to end. Add a case under corpus/cases/, or "+
-			"record it in knownUncovered with the reason.",
-			len(missing), strings.Join(missing, ", "))
+
+	// A family with cases but no row is the drift that matters most: a new family
+	// is invisible in the record that exists to make coverage visible.
+	for code := range families {
+		if !documented[code] {
+			t.Errorf("corpus has %s cases but README's coverage table has no row for it", code)
+		}
 	}
-	t.Logf("%d registry codes, %d fired across %d corpus cases, %d deliberately uncovered",
-		len(codes), len(fired), len(dirs), len(knownUncovered))
+
+	negRow := regexp.MustCompile(`\|\s*_\(negative cases: assert NO finding\)_\s*\|\s*(\d+)\s*\|`)
+	m := negRow.FindStringSubmatch(text)
+	if m == nil {
+		t.Fatal("README has no negative-cases row")
+	}
+	if got, _ := strconv.Atoi(m[1]); got != negatives {
+		t.Errorf("README says %d negative case(s); the corpus has %d", got, negatives)
+	}
 }

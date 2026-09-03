@@ -1,12 +1,19 @@
 {
-  "description": "ADD COLUMN with a constant (non-volatile) DEFAULT is a catalog-only instant on PG 11+ (PASS) but a full-table ACCESS EXCLUSIVE rewrite of all 30M rows on PG 10 (RS-LOCK WARN). One migration, version-divergent across the fast-path boundary (RFC §9.1, D-006/D-007).",
+  "description": "ADD COLUMN with a constant (non-volatile) DEFAULT is a catalog-only instant on PG 11+ (PASS) but a full-table ACCESS EXCLUSIVE rewrite of all 30M rows on PG 10 (RS-LOCK-001 rewrite + RS-LOCK-010 no lock_timeout, both WARN). One migration, version-divergent across the fast-path boundary (RFC §9.1, D-006/D-007).",
   "verdict": "PASS",
   "findings": [],
   "version_verdicts": {
     "10": {
       "verdict": "WARN",
       "findings": [
-        {"code": "RS-LOCK", "severity": "warn"}
+        {
+          "code": "RS-LOCK",
+          "severity": "warn"
+        },
+        {
+          "code": "RS-LOCK",
+          "severity": "warn"
+        }
       ]
     }
   }

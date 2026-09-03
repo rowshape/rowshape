@@ -52,13 +52,34 @@ command which resolves it (RFC §7.4).
 
 | family | cases | severities covered | capping contract (`resolve_contains`) |
 |---|---|---|---|
-| `RS-CONSTRAINT` | 3 | error, warn | no |
+| `RS-APPLY` | 1 | error | no |
+| `RS-CONSTRAINT` | 5 | error, warn | no |
 | `RS-DATA` | 6 | error, warn | yes (3) |
-| `RS-INDEX` | 5 | error, warn | yes (1) |
-| `RS-LOCK` | 4 | warn | no |
-| `RS-PERF` | 4 | warn | no |
-| `RS-REVERSE` | 3 | warn | no |
-| _(negative cases: assert NO finding)_ | 4 | — | — |
+| `RS-DEPLOY` | 3 | warn | no |
+| `RS-INDEX` | 11 | error, warn | yes (1) |
+| `RS-LOCK` | 14 | warn | no |
+| `RS-PERF` | 5 | warn | no |
+| `RS-REVERSE` | 6 | warn | no |
+| `RS-TX` | 2 | error, warn | no |
+| _(negative cases: assert NO finding)_ | 3 | — | — |
+
+**This table is hand-maintained and had drifted** before `RS-APPLY` was added:
+it claimed 5 `RS-INDEX` cases against 9, and 4 negative cases against 3. The
+numbers are corrected above, and the drift is recorded rather than quietly fixed
+because it is the table's own failure mode — a coverage record nothing verifies
+will describe the corpus it had when someone last remembered, not the corpus that
+exists. `TestCoverageTableMatchesTheCorpus` now verifies every number in it against
+`corpus/cases/*/expected.json` — case counts, severities, capping-contract
+coverage, the negative-case count, and that a family with cases is not missing a
+row entirely. The same discipline `TestFindingsDocsUpToDate` applies to the
+generated finding pages. Update the table when you add a case; the test will tell
+you if you forget.
+
+`RS-APPLY` (D-023) is the newest family and the odd one out: every other family
+names a HAZARD in a migration that RAN, while this one covers a migration that
+did not. It has one case, `rsapply-statement-rejected`, and no
+`resolve_contains` case — deliberately, because its remediation names no command
+to re-run. Nothing resolves a typo but fixing it.
 
 **Known remaining gaps**, recorded so the next one is visible rather than
 rediscovered by audit: `RS-LOCK`, `RS-PERF`, `RS-REVERSE` and `RS-CONSTRAINT`

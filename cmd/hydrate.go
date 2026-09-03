@@ -157,7 +157,6 @@ func checkHydrateHost(f *fixture.Fixture, opts *hydrateOptions) error {
 // (--target) or a disposable ephemeral database created and dropped for the run
 // (--ephemeral). Connection strings and credentials are never logged.
 func loadIntoTarget(ctx context.Context, f *fixture.Fixture, genOpts hydrate.Options, opts *hydrateOptions) error {
-
 	// Refuse BEFORE anything is created or connected. This has to precede
 	// target.NewEphemeral, which itself issues a CREATE DATABASE on the admin
 	// server — by the time that returns, the write has already happened.
@@ -203,5 +202,76 @@ func loadIntoTarget(ctx context.Context, f *fixture.Fixture, genOpts hydrate.Opt
 		total += n
 	}
 	fmt.Fprintf(os.Stderr, "rowshape hydrate: loaded %d rows across %d tables\n", total, len(report.Tables))
+	warnSkippedIndexes("hydrate", report.SkippedIndexes)
+	warnSkippedConstraints("hydrate", report.SkippedConstraints)
+	warnUnreproducibleGenerated("hydrate", report.UnreproducibleGenerated)
+	warnUnreproducedPartitions("hydrate", report.UnreproducedPartitionCount)
+	warnUnreproducibleDefaults("hydrate", report.UnreproducibleDefaults)
 	return nil
+}
+
+// warnSkippedIndexes reports secondary indexes the target could not build.
+//
+// An index production has and the disposable database does not is a difference that
+// can change a verdict — a missing UNIQUE index is a constraint no longer enforced,
+// so a migration that would violate it can come back clean. The exit code is
+// unaffected (the hydration itself succeeded), but the omission is never silent.
+func warnSkippedIndexes(cmd string, skipped []string) {
+	for _, s := range skipped {
+		fmt.Fprintf(os.Stderr, "rowshape %s: could not create an index from the fixture; "+
+			"the disposable database does not enforce what it enforces in production: %s\n", cmd, s)
+	}
+}
+
+// warnSkippedConstraints reports deferred constraints (CHECKs) the target could
+// not apply, usually because the synthesized rows do not satisfy the domain logic
+// the constraint encodes.
+//
+// Reported for the same reason and more sharply than a skipped index: a CHECK
+// production enforces and the target does not is a rule a migration can break and
+// still be certified for, which is exactly the wrong PASS that made emitting these
+// necessary. An unenforced constraint the operator was told about is a known
+// limit; one nobody was told about is a bug in the verdict.
+func warnSkippedConstraints(cmd string, skipped []string) {
+	for _, s := range skipped {
+		fmt.Fprintf(os.Stderr, "rowshape %s: could not apply a constraint from the fixture; "+
+			"the disposable database does not enforce what it enforces in production: %s\n", cmd, s)
+	}
+}
+
+// warnUnreproducedPartitions reports partitioned tables whose partition COUNT the
+// target does not match.
+//
+// Count is not decoration: a DDL statement on a partitioned parent takes locks on
+// every partition, and index builds scale with how many there are. A target
+// standing one partition in for ninety understates that, and understating a lock
+// is the direction that turns a real finding into a clean run.
+
+// warnUnreproducibleGenerated reports STORED generated columns the fixture does
+// not describe well enough to recreate, so they became ordinary columns.
+//
+// The direction matters: the target is now more PERMISSIVE than production. An
+// UPDATE of a generated column fails in production with `column "total" can only
+// be updated to DEFAULT` and succeeds here, so the omission has to be visible.
+func warnUnreproducibleDefaults(cmd string, cols []string) {
+	for _, c := range cols {
+		fmt.Fprintf(os.Stderr, "rowshape %s: %s is NOT NULL with a DEFAULT the fixture withholds "+
+			"(privacy:strict), so the target has a bare NOT NULL; it will REJECT inserts that omit "+
+			"the column, which production accepts\n", cmd, c)
+	}
+}
+
+func warnUnreproducedPartitions(cmd string, notes []string) {
+	for _, n := range notes {
+		fmt.Fprintf(os.Stderr, "rowshape %s: %s\n", cmd, n)
+	}
+}
+
+// warnUnreproducibleGenerated reports STORED generated columns the fixture does
+func warnUnreproducibleGenerated(cmd string, cols []string) {
+	for _, c := range cols {
+		fmt.Fprintf(os.Stderr, "rowshape %s: %s is a generated column but the fixture does not carry its "+
+			"expression, so it was created as an ordinary column; the disposable database will accept writes "+
+			"production rejects\n", cmd, c)
+	}
 }
