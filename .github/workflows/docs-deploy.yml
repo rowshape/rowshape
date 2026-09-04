@@ -18,6 +18,12 @@ on:
     paths:
       - 'docs-site/**'
       - '.github/workflows/docs-deploy.yml'
+  # A deploy is not always caused by a content change. Rotating the Cloudflare
+  # token, attaching a custom domain, or recreating the Pages project all need a
+  # deployment to exist before they take effect -- and without this the only way
+  # to get one was to invent a change to docs-site/ and push it. The release
+  # workflow carries workflow_dispatch for the same reason.
+  workflow_dispatch:
 
 # Never let two deploys of the same branch race.
 concurrency:
