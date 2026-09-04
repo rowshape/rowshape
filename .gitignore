@@ -25,3 +25,5 @@ coverage.*
 # pins the tree; the tree itself does not belong in git.
 node_modules/
 docs-site/dist/
+.env
+.env*

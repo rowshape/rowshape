@@ -22,10 +22,12 @@ resolution status of the `open_decisions` in `prd.json`.
 
 Rationale: PRD §14 Phase 0, §7 (distribution / single static binary).
 
-> Status note: the repository currently lives at `github.com/dj-pearson/rowshape`.
-> The Go module path is decided independently of where the git remote points and
-> will not change when the code moves under the `rowshape` GitHub org. Imports are
-> stable from day one.
+> Status note (resolved): the repository now lives at `github.com/rowshape/rowshape`,
+> which is exactly what the module path declared from day one. It moved
+> `dj-pearson` -> `Pearson-Media` -> `rowshape`, and not one import, goreleaser
+> target, npm constant or docs link changed across either hop. Both earlier
+> locations redirect. This is what deciding the module path independently of the
+> git remote bought: the move cost nothing.
 
 ---
 
@@ -37,14 +39,16 @@ These are external ops actions. Each must be confirmed by the owner
 | Namespace | Target | Status | Confirmation |
 |-----------|--------|--------|--------------|
 | Domain | `rowshape.com` | ☐ pending | _capture registrar confirmation_ |
-| GitHub org | `rowshape` | ☐ pending | _create org; move repos under it_ |
+| GitHub org | `rowshape` | ☑ done | Created; `rowshape/rowshape` public, old locations redirect |
 | npm package | `rowshape` | ☐ pending | _placeholder publish of the npx wrapper package name_ |
 | GitHub repo | `rowshape/fixture-spec` | ☐ pending | _create public repo; RFC-0001 + README + LICENSE (P0-T2)_ |
 | GitHub repo | `rowshape/homebrew-tap` | ☐ pending | _tap the goreleaser cask targets (P0-T4)_ |
 | Go module path | `github.com/rowshape/rowshape` | ☑ decided | D-001 above |
 
-Until the three external reservations are confirmed, **P0-T1 stays `blocked`**
-in `prd.json` (loop rule: never fake-pass; never weaken acceptance criteria).
+One of the three external reservations is now confirmed (the GitHub org).
+**P0-T1 stays `blocked`** in `prd.json` until the other two are — the npm name and
+the domain — because the loop rule is never fake-pass, and a story is not done
+because most of it is (never weaken acceptance criteria).
 The Go module path — the only part that blocks downstream code — is settled, so
 code tasks (P0-T3+) can proceed.
 
