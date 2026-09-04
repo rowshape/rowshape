@@ -993,3 +993,37 @@ batch it runs is charged to the same `--statement-timeout`. The demo's 5,000,000
 row backfill takes about 90s, which the 1m default cancels — flooring the verdict
 to WARN with no findings (D-019) and reading as the demo breaking when nothing
 about the migration is wrong.
+
+---
+
+## D-028 — Reserving `rowshape` on npm needed three properties in one token
+
+Creating the npm **organization** `rowshape` reserved the **scope** `@rowshape`. It
+did **not** reserve the unscoped name `rowshape` — which is what `npx rowshape`,
+the install page, the wrapper's own naming test and PRD §7 all depend on. Those
+are separate namespaces, and only the second one matters to this project.
+
+Claiming it took three tokens, because a publishing credential for a **new,
+unscoped** package needs all of:
+
+| | reach the unscoped name | bypass 2FA | outcome |
+|---|---|---|---|
+| granular, `@rowshape` | no | yes | `403 Forbidden` on `PUT /rowshape` |
+| granular, all packages | yes | no | `EOTP` — asks for a code |
+| granular, all + bypass | yes | yes | published |
+
+A granular token cannot create a package outside its scope, and cannot be scoped
+to a package that does not exist yet — so "all packages" is the only granular
+setting that can claim a *new* unscoped name. And a token without `bypass_2fa`
+fails in CI with `EOTP`, asking for a code no one is there to type; that is not a
+permissions error and does not read like one.
+
+The token now in `NPM_TOKEN` satisfies both, and **expires 2026-09-11**. A release
+after that date publishes the GitHub release, the cask and the image, then fails
+only at the npm step — a half-published version. Classic automation tokens do not
+expire; every granular token does.
+
+**`--tag placeholder` did not prevent a `latest` tag.** npm gives a package's
+first publish `latest` regardless, and `latest` cannot be removed. See MERGE-T7:
+`install.js` now refuses a download it can predict will 404, rather than making
+the request and reporting the failure.

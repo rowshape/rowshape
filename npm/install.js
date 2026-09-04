@@ -103,6 +103,27 @@ function verifyChecksum(archivePath, checksums, asset) {
 module.exports = { assetName, expectedSum, verifyChecksum, PLATFORM, ARCH };
 if (require.main !== module) return;
 
+// A PLACEHOLDER version has no release behind it, and saying so is better than
+// letting the download fail.
+//
+// The release workflow stamps this version from the git tag; the version checked
+// into the repo is 0.0.0. That is what gets published to claim the package name
+// before the first real release exists — and npm gives a package's FIRST publish
+// the `latest` tag no matter what `--tag` asked for, so `npx rowshape` resolves
+// to it until a real version supersedes it.
+//
+// Without this guard the install reaches GitHub for
+// releases/download/v0.0.0/... , 404s, and reports a download error — which
+// reads as a broken installer rather than as "this is not released yet". The
+// URL is fully determined here, so the outcome is knowable without the request.
+if (VERSION === "0.0.0") {
+  console.error(
+    "rowshape: this is a placeholder package published to reserve the name — " +
+      "there is no v0.0.0 release to download."
+  );
+  fail("no release has been published yet");
+}
+
 fs.mkdirSync(binDir, { recursive: true });
 const archivePath = path.join(binDir, asset);
 const releaseBase = `https://github.com/${REPO}/releases/download/v${VERSION}`;
