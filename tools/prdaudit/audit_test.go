@@ -188,8 +188,11 @@ var knownOrderingViolations = map[string]string{
 	"P0-T3->P0-T1": "the module path github.com/rowshape/rowshape was fixed before the " +
 		"namespace was reserved; the name is still free but unreserved, so 97 Go files and " +
 		"50 passing stories rest on an assumption P0-T1 exists to remove (D-016)",
-	"P2-T16->P0-T2": "the conformance suite and JSON Schema exist and are verified locally, " +
-		"but 'published as its own public repo' needs the org from P0-T1 (D-016)",
+	"P0-T2->P0-T1": "the spec repo is published and P0-T2's three criteria are met, but P0-T1 " +
+		"stays blocked on ONE remaining reservation: confirming rowshape.com at the registrar. " +
+		"The part of P0-T1 that actually gates this story -- the `rowshape` GitHub org -- exists, " +
+		"and a domain cannot gate publishing a repo. Recorded rather than silently accepted, " +
+		"because the exemption is the org being real, not the story being close enough",
 }
 
 // TestNoNewOrderingViolations: a passing story whose dependency does not pass
