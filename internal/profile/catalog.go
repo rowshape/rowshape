@@ -702,7 +702,19 @@ func (r *reader) indexes(ctx context.Context, oid uint32) ([]fixture.Index, erro
 	//
 	// indclass also feeds opclassUses, which is how an extension requirement hiding
 	// in an index reaches §6.8: gin_trgm_ops needs pg_trgm and no column type says so.
-	const q = `
+	//
+	// indnkeyatts DOES NOT EXIST BEFORE PostgreSQL 11. INCLUDE — covering indexes —
+	// is a PG 11 feature, so on 10 there is no payload to separate: every indexed
+	// column IS a key column, and indnatts is exactly the same number. Substituting
+	// it keeps the key/include split below correct without the caller knowing.
+	//
+	// Read unconditionally, it made `pull`, `plan`, `verify` and the catalog read
+	// itself fail outright on PG 10 with `column ix.indnkeyatts does not exist`
+	// (SQLSTATE 42703) — against a README and D-022 that both claim support from 10.
+	// The version matrix is what caught it, the first time it ever ran (PR-T14).
+	// This is the exact hazard D-006/D-007 describe: a read that is right on one
+	// major and absent on another.
+	q := strings.ReplaceAll(`
 SELECT ic.relname, am.amname, ix.indisunique,
        pg_get_expr(ix.indpred, ix.indrelid),
        pg_relation_size(ic.oid),
@@ -727,7 +739,7 @@ FROM pg_index ix
 JOIN pg_class ic ON ic.oid = ix.indexrelid
 JOIN pg_am am ON am.oid = ic.relam
 WHERE ix.indrelid = $1
-ORDER BY ic.relname`
+ORDER BY ic.relname`, "ix.indnkeyatts", indexKeyCountColumn(r.serverMajor))
 
 	rows, err := r.tx.Query(ctx, q, oid)
 	if err != nil {
@@ -1025,6 +1037,25 @@ func onDeleteAction(t string) string {
 
 // parseAttnums parses the space-separated attnum list from an int2vector's text
 // form (pg_index.indkey) into attribute numbers.
+// indexKeyCountColumn returns the catalog column holding an index's KEY column
+// count for a given server major, and is the whole of the PG 11 boundary.
+//
+// A major of 0 means the version is unknown. It resolves to indnkeyatts — the
+// modern column — deliberately: every supported major from 11 has it, an unknown
+// version is far more likely to be new than to be 10, and the failure is a loud
+// 42703 at the first catalog read rather than a wrong answer. Guessing the OLD
+// column would silently record an index's INCLUDE payload as part of its key,
+// which widens a UNIQUE index's key and can certify a migration that violates
+// the uniqueness production actually enforces.
+func indexKeyCountColumn(major int) string {
+	if major > 0 && major < 11 {
+		// No INCLUDE before 11, so every indexed column is a key column and
+		// indnatts is the same number indnkeyatts would have returned.
+		return "ix.indnatts"
+	}
+	return "ix.indnkeyatts"
+}
+
 func parseAttnums(s string) []int16 {
 	var out []int16
 	var cur int16

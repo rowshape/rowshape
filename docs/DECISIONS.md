@@ -1027,3 +1027,44 @@ expire; every granular token does.
 first publish `latest` regardless, and `latest` cannot be removed. See MERGE-T7:
 `install.js` now refuses a download it can predict will 404, rather than making
 the request and reporting the failure.
+
+---
+
+## D-029 — `pull` was broken on PostgreSQL 10, and the matrix is what found it
+
+`pg_index.indnkeyatts` arrived with INCLUDE — covering indexes — in **PostgreSQL
+11**. The catalog read used it unconditionally, so on PG 10 every one of `pull`,
+`plan`, `verify` and the structure read itself failed outright:
+
+```
+ERROR: column ix.indnkeyatts does not exist (SQLSTATE 42703)
+```
+
+against a README and D-022 that both claim support from 10. The tool did not
+work at all on the oldest major it advertises.
+
+It survived because **the version matrix had never run** (PR-T14, blocked on an
+environment that could not install the servers). The first CI run after the org
+move caught it on PG 10 and PG 11 within two minutes. This is precisely the
+hazard D-006/D-007 name — a catalog read that is right on one major and absent on
+another — and it is the argument for the matrix stated better than the matrix's
+own header states it.
+
+The boundary now lives in `indexKeyCountColumn(major)`, a named function with an
+assertion on both sides, rather than an inline conditional. Before 11 there is no
+INCLUDE, so every indexed column is a key column and `indnatts` is exactly the
+number `indnkeyatts` would have returned.
+
+**An unknown version (major 0) resolves to the modern column, deliberately.**
+Every supported major from 11 has it, an unknown version is far likelier to be
+new than to be 10, and the failure is a loud 42703 at the first catalog read.
+Guessing the old column would instead record an index's INCLUDE payload as part
+of its key — silently widening a UNIQUE index's key, which can certify a
+migration that violates the uniqueness production actually enforces. Loud and
+wrong-version beats quiet and wrong-answer.
+
+**Separately, on PG 11:** two test SEEDS declare a STORED generated column, which
+is PG 12+. That is a fixture the older server cannot express, not a reader
+defect, so those seeds skip below 12 (`requireMajor`). The distinction matters: a
+version-gated READ gets a real assertion on both sides of its boundary; only a
+schema the server cannot state at all is skipped.

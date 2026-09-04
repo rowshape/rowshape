@@ -11,6 +11,10 @@ const defSchema = "rowshape_default_test"
 
 func seedDefaults(t *testing.T, conn *pgx.Conn) {
 	t.Helper()
+	// The schema below declares a STORED generated column, which does not exist
+	// before PostgreSQL 12 — the CREATE TABLE fails to parse there, so the test
+	// says nothing about rowshape either way.
+	requireMajor(t, conn, 12)
 	ctx := context.Background()
 	stmts := []string{
 		`DROP SCHEMA IF EXISTS ` + defSchema + ` CASCADE`,
