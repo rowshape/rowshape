@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,11 +119,26 @@ func TestPullRefusesSuperuser(t *testing.T) {
 // is the RFC §8.4 privacy invariant that makes a committed fixture safe to share.
 func TestPullHashesSourceHost(t *testing.T) {
 	admin := requireAdminDSN(t)
+	// Profile ONE schema this test owns, not the whole server.
+	//
+	// Unrestricted, this pull enumerates every non-system schema and then
+	// profiles each table it found. CI runs the packages in parallel against a
+	// SHARED Postgres service, so another package's `DROP SCHEMA ... CASCADE`
+	// lands between the enumeration and the profile and pull aborts with
+	// `relation "..." does not exist` (42P01) -- on a different schema every run
+	// (rowshape_limits_test.big, rowshape_p1b_t3.users, rowshape_p1t11.events),
+	// and on whichever matrix leg happened to lose the race. It reads like a
+	// version failure and is not one.
+	//
+	// The subject here is meta.source being a salted hash, which one small table
+	// establishes exactly as well as the whole server does.
+	schema := seedPullSchema(t, admin)
 	out := filepath.Join(t.TempDir(), "out.yaml")
 	code, _, stderr := runPullCapturing(t, &pullOptions{
 		dsn:               admin,
 		privacy:           "standard",
 		out:               out,
+		schemas:           []string{schema},
 		iKnow:             true, // override the superuser refusal for the test server
 		maxEscalationRows: profile.DefaultMaxEscalationRows,
 	})
@@ -156,4 +173,33 @@ func TestPullHashesSourceHost(t *testing.T) {
 	if f.Meta.Privacy != "standard" {
 		t.Errorf("meta.privacy = %q, want standard", f.Meta.Privacy)
 	}
+}
+
+// seedPullSchema builds a small schema this test alone owns, so a pull restricted
+// to it cannot race another package's teardown. It is dropped when the test ends.
+func seedPullSchema(t *testing.T, dsn string) string {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("admin connection unusable: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+
+	const schema = "rowshape_pull_host_test"
+	for _, stmt := range []string{
+		`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`,
+		`CREATE SCHEMA ` + schema,
+		`CREATE TABLE ` + schema + `.t (id bigint PRIMARY KEY, email text)`,
+		`INSERT INTO ` + schema + `.t SELECT g, 'u' || g || '@example.invalid' FROM generate_series(1, 50) g`,
+		`ANALYZE ` + schema + `.t`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seeding %s (%s): %v", schema, stmt, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = conn.Exec(context.Background(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	})
+	return schema
 }
