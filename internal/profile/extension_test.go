@@ -21,6 +21,14 @@ const extSchema = "rowshape_ext_test"
 // defect in the code under test.
 func seedExtensions(t *testing.T, conn *pgx.Conn) {
 	t.Helper()
+	// The schema below declares a covering index (INCLUDE), which arrived in
+	// PostgreSQL 11. On 10 the CREATE INDEX does not parse, so the test says
+	// nothing about rowshape either way.
+	//
+	// The READ side of that same boundary is not skipped — indexKeyCountColumn
+	// asserts both sides of it without needing a PG 10 server (D-029). What is
+	// skipped here is only a schema the older server cannot express.
+	requireMajor(t, conn, 11)
 	ctx := context.Background()
 	for _, ext := range []string{"citext", "pg_trgm"} {
 		if _, err := conn.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS `+ext); err != nil {
