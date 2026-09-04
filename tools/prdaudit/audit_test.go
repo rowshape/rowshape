@@ -184,16 +184,19 @@ func TestEveryInvariantIsTraceable(t *testing.T) {
 // bookkeeping: each depends on an EXTERNAL act (reserving a namespace,
 // publishing a repo) that no amount of local work can satisfy, so the code was
 // written against an assumption the dependency exists to remove. See D-016.
-var knownOrderingViolations = map[string]string{
-	"P0-T3->P0-T1": "the module path github.com/rowshape/rowshape was fixed before the " +
-		"namespace was reserved; the name is still free but unreserved, so 97 Go files and " +
-		"50 passing stories rest on an assumption P0-T1 exists to remove (D-016)",
-	"P0-T2->P0-T1": "the spec repo is published and P0-T2's three criteria are met, but P0-T1 " +
-		"stays blocked on ONE remaining reservation: confirming rowshape.com at the registrar. " +
-		"The part of P0-T1 that actually gates this story -- the `rowshape` GitHub org -- exists, " +
-		"and a domain cannot gate publishing a repo. Recorded rather than silently accepted, " +
-		"because the exemption is the org being real, not the story being close enough",
-}
+// Empty, and that is the point: every ordering violation this map ever held has
+// been RESOLVED rather than permanently exempted.
+//
+// Both entries were the same root — work accepted while P0-T1 (namespace
+// reservation) was still blocked. P0-T3 fixed the module path on an unreserved
+// name, and P0-T2 published the spec repo before the domain was confirmed. P0-T1
+// now passes on all four criteria, checked against the live services, so neither
+// violation exists to exempt.
+//
+// The audit refuses a stale entry precisely so this map cannot quietly become a
+// list of things nobody re-examines. Add an entry only with a reason, and expect
+// to be told when the reason expires.
+var knownOrderingViolations = map[string]string{}
 
 // TestNoNewOrderingViolations: a passing story whose dependency does not pass
 // means work was accepted before its prerequisite. That is worth catching,

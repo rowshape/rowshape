@@ -38,17 +38,22 @@ These are external ops actions. Each must be confirmed by the owner
 
 | Namespace | Target | Status | Confirmation |
 |-----------|--------|--------|--------------|
-| Domain | `rowshape.com` | ☐ pending | _capture registrar confirmation_ |
+| Domain | `rowshape.com` | ☑ done | Cloudflare zone in the owner's account; `active` custom domain on rowshape-docs, serving 200 |
 | GitHub org | `rowshape` | ☑ done | Created; `rowshape/rowshape` public, old locations redirect |
-| npm package | `rowshape` | ☐ pending | _placeholder publish of the npx wrapper package name_ |
-| GitHub repo | `rowshape/fixture-spec` | ☐ pending | _create public repo; RFC-0001 + README + LICENSE (P0-T2)_ |
-| GitHub repo | `rowshape/homebrew-tap` | ☐ pending | _tap the goreleaser cask targets (P0-T4)_ |
+| npm package | `rowshape` | ☑ done | `rowshape@0.0.0` published, owner pearsonmedia (see D-028) |
+| GitHub repo | `rowshape/fixture-spec` | ☑ done | Public, RFC-0001 at format version `1`, MIT (P0-T2) |
+| GitHub repo | `rowshape/homebrew-tap` | ☑ done | Public, `main` initialized so goreleaser has somewhere to push |
 | Go module path | `github.com/rowshape/rowshape` | ☑ decided | D-001 above |
 
-One of the three external reservations is now confirmed (the GitHub org).
-**P0-T1 stays `blocked`** in `prd.json` until the other two are — the npm name and
-the domain — because the loop rule is never fake-pass, and a story is not done
-because most of it is (never weaken acceptance criteria).
+**All three external reservations are now confirmed, and P0-T1 is `done`.** The
+domain was the last and the one that had been *inferred* rather than checked: the
+early evidence (NOERROR, no A record, Cloudflare nameservers) was consistent with
+registered-but-not-deployed, which is not the same as confirmed. It is now a zone
+in the owner's account, an `active` custom domain on the `rowshape-docs` Pages
+project, serving 200 on every documented route.
+
+The loop rule held the whole way: the story stayed `blocked` while two of three,
+then one of three, were outstanding — a story is not done because most of it is.
 The Go module path — the only part that blocks downstream code — is settled, so
 code tasks (P0-T3+) can proceed.
 
