@@ -1,20 +1,21 @@
 {
-  "name": "rowshape-docs",
-  "type": "module",
-  "version": "0.1.0",
-  "scripts": {
-    "dev": "astro dev",
-    "start": "astro dev",
-    "build": "astro build",
-    "preview": "astro preview",
-    "astro": "astro",
-    "check": "node scripts/check-build.mjs",
-    "verify": "astro build && node scripts/check-build.mjs"
-  },
-  "dependencies": {
-    "@astrojs/starlight": "^0.41.3",
-    "astro": "^7.0.2",
-    "sharp": "^0.34.5"
-  },
-  "private": true
+	"name": "rowshape-docs",
+	"type": "module",
+	"version": "0.1.0",
+	"scripts": {
+		"dev": "astro dev",
+		"start": "astro dev",
+		"build": "astro build",
+		"preview": "astro preview",
+		"astro": "astro",
+		"check": "node scripts/check-build.mjs",
+		"verify": "astro build && node scripts/check-build.mjs",
+		"og": "node scripts/make-og.mjs"
+	},
+	"dependencies": {
+		"@astrojs/starlight": "^0.41.3",
+		"astro": "^7.0.2",
+		"sharp": "^0.34.5"
+	},
+	"private": true
 }

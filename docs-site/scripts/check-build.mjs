@@ -183,6 +183,74 @@ async function checkRobots() {
 	return problems;
 }
 
+// The social card. Starlight emits twitter:card=summary_large_image on every
+// page whether or not an image exists, so the failure mode this guards is a
+// blank rectangle in every Slack, X and LinkedIn preview — invisible from
+// inside the repo, and invisible in the built HTML too unless something reads
+// the tag and follows it. So: every page must declare an absolute og:image, the
+// file must be in dist/, and the width/height it advertises must be the file's
+// real dimensions, because scrapers that trust the tag and get a mismatch crop.
+function pngSize(buf) {
+	// IHDR is fixed at bytes 16..24 of any PNG. Parsed by hand rather than pulling
+	// sharp in here — this script stays dependency-free on purpose.
+	if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return null;
+	return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+}
+
+async function checkSocialCard(pages) {
+	const problems = [];
+	// Keyed by the whole triple, not by src: keying on the URL alone lets a page
+	// that declares the wrong dimensions be overwritten by the 48 that declare the
+	// right ones, and the guard reports clean. Found by negative-testing it.
+	const seen = new Map(); // "src|w|h" -> { src, width, height, page }
+
+	for (const page of pages) {
+		const html = await readFile(page, 'utf8');
+		const rel = page.replace(/\\/g, '/');
+		const image = html.match(/<meta property="og:image" content="([^"]+)"/);
+		if (!image) {
+			problems.push(`${rel}: no og:image`);
+			continue;
+		}
+		if (!/^https?:\/\//.test(image[1])) {
+			problems.push(`${rel}: og:image "${image[1]}" is not absolute — scrapers ignore relative ones`);
+			continue;
+		}
+		if (!html.includes('<meta name="twitter:image"')) {
+			problems.push(`${rel}: og:image without twitter:image`);
+		}
+		const w = html.match(/<meta property="og:image:width" content="(\d+)"/);
+		const h = html.match(/<meta property="og:image:height" content="(\d+)"/);
+		if (w && h) {
+			seen.set(`${image[1]}|${w[1]}|${h[1]}`, {
+				src: image[1],
+				width: Number(w[1]),
+				height: Number(h[1]),
+				page: rel,
+			});
+		}
+	}
+
+	for (const declared of seen.values()) {
+		const { src } = declared;
+		const path = join(DIST, new URL(src).pathname);
+		if (!existsSync(path)) {
+			problems.push(`og:image ${src} is not in dist/ — run \`npm run og\` and commit public/og.png`);
+			continue;
+		}
+		const actual = pngSize(await readFile(path));
+		if (!actual) {
+			problems.push(`og:image ${src} is not a readable PNG`);
+		} else if (actual.width !== declared.width || actual.height !== declared.height) {
+			problems.push(
+				`${declared.page}: og:image ${src} is ${actual.width}x${actual.height} but the page ` +
+					`declares ${declared.width}x${declared.height}`
+			);
+		}
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -202,8 +270,15 @@ async function main() {
 	const broken = await checkLinks(pages);
 	const privacy = await checkPrivacyClaim();
 	const robots = await checkRobots();
+	const social = await checkSocialCard(pages);
 
 	let failed = false;
+	if (social.length) {
+		failed = true;
+		console.error(`${social.length} social-card problem(s):`);
+		for (const c of social.slice(0, 10)) console.error(`  ${c}`);
+		if (social.length > 10) console.error(`  … and ${social.length - 10} more`);
+	}
 	if (robots.length) {
 		failed = true;
 		console.error(`${robots.length} robots.txt problem(s):`);
@@ -231,7 +306,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
 }
 
 await main();
