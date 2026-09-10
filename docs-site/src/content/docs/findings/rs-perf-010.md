@@ -1,6 +1,6 @@
 ---
 title: 'RS-PERF-010 — A qualified UPDATE/DELETE on a large table rewrites many rows in one statement'
-description: 'RS-PERF-002 only fires when a statement has NO WHERE clause, but the real-world hazard always has one: UPDATE users SET normalized = lower(email) WHERE normalized IS NULL is the canonical unbatched backfill — one statement, tens of millions of rows, one transaction, row locks held for the whole duration, table bloat, and a replication lag spike.'
+description: 'A qualified UPDATE or DELETE that touches tens of millions of rows in one statement: row locks held throughout, bloat, replication lag.'
 seoTitle: 'RS-PERF-010: large single-statement UPDATE or DELETE'
 ---
 

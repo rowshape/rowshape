@@ -1,6 +1,6 @@
 ---
 title: 'RS-TX-001 — This statement cannot run inside a transaction block'
-description: 'Postgres refuses a handful of statements inside a transaction block with SQLSTATE 25001: CREATE/DROP INDEX CONCURRENTLY, REINDEX CONCURRENTLY, VACUUM, CLUSTER, CREATE/DROP DATABASE and TABLESPACE, ALTER SYSTEM, and (before PostgreSQL 12) ALTER TYPE .'
+description: 'Postgres refuses some statements inside a transaction block with SQLSTATE 25001: CREATE INDEX CONCURRENTLY, VACUUM, ALTER SYSTEM and more.'
 seoTitle: 'RS-TX-001: statement cannot run in a transaction block'
 ---
 

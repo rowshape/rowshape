@@ -1,6 +1,6 @@
 ---
 title: 'RS-CONSTRAINT-001 — NOT VALID constraint validated in the same transaction'
-description: 'Adding a constraint NOT VALID and VALIDATE-ing it in one transaction still runs the full validating scan under the transaction''s locks — the two-step split whose entire purpose is to avoid a long lock buys nothing.'
+description: 'Adding a constraint NOT VALID and validating it in the same transaction still runs the full scan under that transaction''s locks.'
 seoTitle: 'RS-CONSTRAINT-001: NOT VALID validated in the same tx'
 ---
 

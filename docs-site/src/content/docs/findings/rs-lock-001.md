@@ -1,6 +1,6 @@
 ---
 title: 'RS-LOCK-001 — ACCESS EXCLUSIVE lock for a full table rewrite'
-description: 'Adding a column with a volatile default, or changing a column''s type, rewrites every row while holding an ACCESS EXCLUSIVE lock — no reads or writes proceed until it finishes.'
+description: 'Adding a column with a volatile default, or changing a column''s type, rewrites every row while holding an ACCESS EXCLUSIVE lock.'
 seoTitle: 'RS-LOCK-001: ACCESS EXCLUSIVE for a full table rewrite'
 ---
 

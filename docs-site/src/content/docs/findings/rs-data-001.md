@@ -1,6 +1,6 @@
 ---
 title: 'RS-DATA-001 — SET NOT NULL against existing NULLs'
-description: 'SET NOT NULL scans the table and rejects rows that are NULL.'
+description: 'SET NOT NULL scans the table and rejects rows that are NULL. If the column''s null_fraction is above zero, the migration fails on contact.'
 seoTitle: 'RS-DATA-001: SET NOT NULL against existing NULLs'
 ---
 

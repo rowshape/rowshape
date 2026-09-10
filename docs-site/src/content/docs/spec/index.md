@@ -1,6 +1,6 @@
 ---
 title: Fixture spec
-description: RFC-0001 — the open format rowshape reads and writes.
+description: 'RFC-0001, the open fixture format rowshape reads and writes: statistics computed from your data, no rows, small enough to review in a pull request.'
 sidebar:
   order: 1
 ---

@@ -1,6 +1,6 @@
 ---
 title: 'RS-LOCK-003 — ATTACH PARTITION validates the incoming rows under a lock on the parent'
-description: 'ATTACH PARTITION takes ACCESS EXCLUSIVE on the PARENT table — blocking every query against every partition — and then scans the incoming table to prove every row satisfies the partition bound, unless a matching CHECK constraint already exists.'
+description: 'ATTACH PARTITION takes ACCESS EXCLUSIVE on the parent table, blocking every partition, then scans the incoming rows against the bound.'
 seoTitle: 'RS-LOCK-003: ATTACH PARTITION locks the parent table'
 ---
 

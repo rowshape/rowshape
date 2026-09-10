@@ -1,6 +1,6 @@
 ---
 title: Install
-description: Install the rowshape CLI — a single static binary, no runtime.
+description: 'Install the rowshape CLI — a single static binary with no runtime — via Homebrew, go install, npx, a direct download, or Docker in CI.'
 sidebar:
   order: 1
 ---
