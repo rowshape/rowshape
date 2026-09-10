@@ -84,9 +84,13 @@ async function checkJSBudget(pages) {
 			total += (await stat(path)).size;
 			loaded.push(src);
 		}
-		// Inline scripts ship on the page itself and count too.
-		for (const m of html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)) {
-			total += Buffer.byteLength(m[1], 'utf8');
+		// Inline scripts ship on the page itself and count too — except JSON-LD,
+		// which is a data block the browser never executes. Charging structured
+		// data to a budget that exists to keep framework runtimes out would make
+		// the two compete, and the answer would be to drop the metadata.
+		for (const m of html.matchAll(/<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/g)) {
+			if (/type="application\/ld\+json"/.test(m[1])) continue;
+			total += Buffer.byteLength(m[2], 'utf8');
 		}
 
 		const rel = page.replace(/\\/g, '/');
@@ -363,6 +367,62 @@ async function checkDescriptions(pages) {
 	return problems;
 }
 
+/**
+ * Structured data.
+ *
+ * JSON-LD fails silently in both directions: malformed JSON is dropped without
+ * a word, and INVENTED data is worse than none — a fabricated aggregateRating
+ * is the classic way a site gets its structured data distrusted wholesale. So
+ * this asserts the block parses, says what it claims to be, and contains no
+ * node the repo cannot back up.
+ */
+const FABRICATED_TYPES = ['aggregateRating', 'review', 'ratingValue', 'reviewCount'];
+
+async function checkStructuredData(pages) {
+	const problems = [];
+	let found = 0;
+
+	for (const page of pages) {
+		const html = await readFile(page, 'utf8');
+		const rel = page.replace(/\\/g, '/');
+		for (const m of html.matchAll(
+			/<script type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/g
+		)) {
+			found++;
+			let data;
+			try {
+				data = JSON.parse(m[1]);
+			} catch (e) {
+				problems.push(`${rel}: JSON-LD does not parse — ${e.message}`);
+				continue;
+			}
+			if (data['@context'] !== 'https://schema.org') {
+				problems.push(`${rel}: JSON-LD @context is not https://schema.org`);
+			}
+			const nodes = data['@graph'] ?? [data];
+			for (const node of nodes) {
+				if (!node['@type']) problems.push(`${rel}: a JSON-LD node has no @type`);
+			}
+			for (const key of FABRICATED_TYPES) {
+				if (m[1].includes(`"${key}"`)) {
+					problems.push(
+						`${rel}: JSON-LD contains "${key}" — rowshape has no ratings or reviews, and ` +
+							'claiming them is how a site gets its structured data ignored entirely'
+					);
+				}
+			}
+		}
+	}
+
+	// The homepage is the one page that must carry it.
+	const home = pages.find((p) => p.replace(/\\/g, '/') === 'dist/index.html');
+	if (home && !(await readFile(home, 'utf8')).includes('application/ld+json')) {
+		problems.push('dist/index.html: no JSON-LD — the homepage should describe the software');
+	}
+	if (found === 0) problems.push('no JSON-LD anywhere in dist/');
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -385,8 +445,14 @@ async function main() {
 	const social = await checkSocialCard(pages);
 	const titles = await checkTitles(pages);
 	const descriptions = await checkDescriptions(pages);
+	const jsonld = await checkStructuredData(pages);
 
 	let failed = false;
+	if (jsonld.length) {
+		failed = true;
+		console.error(`${jsonld.length} structured-data problem(s):`);
+		for (const j of jsonld) console.error(`  ${j}`);
+	}
 	if (descriptions.length) {
 		failed = true;
 		console.error(`${descriptions.length} meta-description problem(s):`);
@@ -430,7 +496,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
 }
 
 await main();

@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import { SITE, REPO } from './src/site.ts';
 
 // The one place the stack is deliberately not Go (PRD §9). The Go decision was
 // about the binary — single static artifact, no runtime, hydrate is CPU-bound —
@@ -8,11 +9,6 @@ import starlight from '@astrojs/starlight';
 // purpose-built for docs plus a landing page, and it deploys onto the Cloudflare
 // Pages standard the rest of this org already uses.
 //
-// The canonical origin. Everything that needs an absolute URL — the sitemap,
-// robots.txt, and the social-card tags below — derives it from here, so there is
-// exactly one place to change if the site ever moves.
-const SITE = 'https://rowshape.com';
-
 // https://astro.build/config
 export default defineConfig({
 	site: SITE,
@@ -25,7 +21,7 @@ export default defineConfig({
 			// homepage title. See the file for why both are needed.
 			routeMiddleware: './src/starlightRouteData.ts',
 			social: [
-				{ icon: 'github', label: 'GitHub', href: 'https://github.com/rowshape/rowshape' },
+				{ icon: 'github', label: 'GitHub', href: REPO },
 			],
 			// The social card. Starlight already emits twitter:card=summary_large_image
 			// on every page, which without an image renders as a blank rectangle
@@ -54,7 +50,7 @@ export default defineConfig({
 				{ tag: 'meta', attrs: { name: 'twitter:image', content: `${SITE}/og.png` } },
 			],
 			editLink: {
-				baseUrl: 'https://github.com/rowshape/rowshape/edit/main/docs-site/',
+				baseUrl: `${REPO}/edit/main/docs-site/`,
 			},
 			// The sections the docs are organized around. Content lands in P4-T4
 			// (install, findings, privacy) and P4-T5 (agents/MCP, fixture spec); this

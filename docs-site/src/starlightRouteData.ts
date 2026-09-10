@@ -1,5 +1,69 @@
 import { defineRouteMiddleware } from '@astrojs/starlight/route-data';
 
+import { SITE, REPO } from './site';
+
+/**
+ * Structured data for the homepage.
+ *
+ * The site emitted none at all, which means a search engine had to infer from
+ * prose that rowshape is a free, MIT-licensed developer tool rather than being
+ * told. Three nodes in one graph, which is the shape Google expects: who
+ * publishes the site, what the site is, and what the software is.
+ *
+ * Everything here is a fact checkable in this repo — the licence from LICENSE,
+ * the platforms from .goreleaser.yaml's goos list, the language from go.mod, the
+ * install methods from the install page. There is deliberately no
+ * `aggregateRating`: rowshape has no ratings, and inventing them to win a star
+ * in a result is the exact thing that gets structured data ignored.
+ */
+function homepageJsonLd(description: string) {
+	return {
+		'@context': 'https://schema.org',
+		'@graph': [
+			{
+				'@type': 'Organization',
+				'@id': `${SITE}/#organization`,
+				name: 'rowshape',
+				url: SITE,
+				logo: `${SITE}/favicon.svg`,
+				sameAs: [REPO],
+			},
+			{
+				'@type': 'WebSite',
+				'@id': `${SITE}/#website`,
+				name: 'rowshape',
+				url: SITE,
+				description,
+				publisher: { '@id': `${SITE}/#organization` },
+				inLanguage: 'en',
+			},
+			{
+				'@type': 'SoftwareApplication',
+				'@id': `${SITE}/#software`,
+				name: 'rowshape',
+				applicationCategory: 'DeveloperApplication',
+				applicationSubCategory: 'Database migration testing',
+				description,
+				url: SITE,
+				// linux, darwin and windows, per .goreleaser.yaml.
+				operatingSystem: 'macOS, Linux, Windows',
+				programmingLanguage: 'Go',
+				codeRepository: REPO,
+				downloadUrl: `${SITE}/install/`,
+				softwareHelp: `${SITE}/reference/`,
+				license: 'https://opensource.org/licenses/MIT',
+				isAccessibleForFree: true,
+				offers: {
+					'@type': 'Offer',
+					price: '0',
+					priceCurrency: 'USD',
+				},
+				publisher: { '@id': `${SITE}/#organization` },
+			},
+		],
+	};
+}
+
 /**
  * The `<title>` a search engine shows is not always the heading a reader wants
  * at the top of the page, and Starlight ties them together: it emits
@@ -45,6 +109,20 @@ export const onRequest = defineRouteMiddleware((context) => {
 
 	for (const tag of head) {
 		if (tag.tag === 'title') tag.content = title;
+	}
+
+	if (isSiteRoot) {
+		const description =
+			data.description ?? 'The type-checker for database migrations.';
+		head.push({
+			tag: 'script',
+			attrs: { type: 'application/ld+json' },
+			// JSON.stringify cannot emit a bare "</script>", but a description
+			// containing "<" would still be raw HTML inside a script element, so the
+			// one character that can break out is escaped. Cheap, and it means a
+			// future edit to the frontmatter cannot silently corrupt the page.
+			content: JSON.stringify(homepageJsonLd(description)).replace(/</g, '\\u003c'),
+		});
 	}
 	// og:title is deliberately left alone. It is the share-card headline, where
 	// there is room for the full sentence and no results page to truncate it.

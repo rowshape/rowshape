@@ -81,7 +81,16 @@
     {
       "id": "SEO-5",
       "title": "JSON-LD SoftwareApplication on the homepage",
-      "status": "open"
+      "status": "done",
+      "iteration": 5,
+      "verified": [
+        "homepage emits a schema.org @graph of Organization + WebSite + SoftwareApplication; parsed back out of dist/index.html, not assumed",
+        "every claim is checkable in the repo: MIT from LICENSE, \"macOS, Linux, Windows\" from .goreleaser.yaml goos, Go from go.mod, the install and reference URLs from the pages that exist",
+        "no aggregateRating, and the guard REFUSES one — inventing ratings is how a site gets its structured data distrusted wholesale",
+        "the client-JS budget no longer charges JSON-LD: it is a data block the browser never executes, and making metadata compete with a budget meant to keep framework runtimes out would get the metadata dropped",
+        "SITE and REPO moved into src/site.ts, imported by both astro.config.mjs and the route middleware — iteration 2 had left a second copy of the origin, which is exactly the drift robots.txt was written to avoid",
+        "guard negative-tested on a fabricated aggregateRating and on malformed JSON"
+      ]
     },
     {
       "id": "SEO-6",
