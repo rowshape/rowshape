@@ -251,6 +251,63 @@ async function checkSocialCard(pages) {
 	return problems;
 }
 
+/**
+ * The title tag, in bytes a results page will actually show.
+ *
+ * 60 characters is not a rule Google publishes — the real limit is a pixel
+ * width — but it is the width at which a desktop result starts to ellipsize,
+ * and it is checkable. The findings catalog had titles up to 110 characters, so
+ * a searcher saw the code and half a sentence with the brand cut off; the fix
+ * (frontmatter `seoTitle`) is only worth having if something stops it regressing
+ * the next time a heading is reworded.
+ *
+ * Duplicate titles are the other failure: 49 pages competing on the same string
+ * is 49 pages Google has to guess between.
+ */
+const TITLE_MAX = 60;
+
+async function checkTitles(pages) {
+	const problems = [];
+	const byTitle = new Map();
+
+	for (const page of pages) {
+		const html = await readFile(page, 'utf8');
+		const rel = page.replace(/\\/g, '/');
+		const m = html.match(/<title>([^<]*)<\/title>/);
+		if (!m || !m[1].trim()) {
+			problems.push(`${rel}: no <title>`);
+			continue;
+		}
+		// Entities are what a scraper decodes, so measure the decoded string.
+		const title = m[1]
+			.replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+			.replace(/&amp;/g, '&')
+			.replace(/&lt;/g, '<')
+			.replace(/&gt;/g, '>')
+			.replace(/&quot;/g, '"')
+			.replace(/&#39;/g, "'");
+
+		if ([...title].length > TITLE_MAX) {
+			problems.push(
+				`${rel}: <title> is ${[...title].length} chars, over ${TITLE_MAX} — set a shorter ` +
+					'`seoTitle` in frontmatter (it does not change the page heading)'
+			);
+		}
+
+		// "rowshape | rowshape": the site title appended to a page title that is
+		// already the site title. This is what the route middleware exists to stop.
+		const parts = title.split('|').map((t) => t.trim().toLowerCase());
+		if (parts.length > 1 && new Set(parts).size !== parts.length) {
+			problems.push(`${rel}: <title> repeats itself across the delimiter — "${title}"`);
+		}
+
+		const prior = byTitle.get(title);
+		if (prior) problems.push(`${rel}: <title> duplicates ${prior} — "${title}"`);
+		else byTitle.set(title, rel);
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -271,8 +328,14 @@ async function main() {
 	const privacy = await checkPrivacyClaim();
 	const robots = await checkRobots();
 	const social = await checkSocialCard(pages);
+	const titles = await checkTitles(pages);
 
 	let failed = false;
+	if (titles.length) {
+		failed = true;
+		console.error(`${titles.length} <title> problem(s):`);
+		for (const t of titles) console.error(`  ${t}`);
+	}
 	if (social.length) {
 		failed = true;
 		console.error(`${social.length} social-card problem(s):`);
@@ -306,7 +369,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
 }
 
 await main();

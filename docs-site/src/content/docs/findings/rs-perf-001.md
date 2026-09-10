@@ -1,6 +1,7 @@
 ---
 title: 'RS-PERF-001 — DELETE cascades through a long-tailed fan-out'
 description: 'Deleting from a parent table referenced ON DELETE CASCADE cascades to its children.'
+seoTitle: 'RS-PERF-001: DELETE cascades through a long fan-out'
 ---
 
 **Namespace:** `RS-PERF` · **Code:** `RS-PERF-001`

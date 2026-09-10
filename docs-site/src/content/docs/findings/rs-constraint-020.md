@@ -1,6 +1,7 @@
 ---
 title: 'RS-CONSTRAINT-020 — ADD CONSTRAINT without NOT VALID scans the whole table under ACCESS EXCLUSIVE'
 description: 'Adding a CHECK or FOREIGN KEY constraint without NOT VALID validates every existing row before the statement returns, holding ACCESS EXCLUSIVE for the whole scan — so reads and writes on the table block for its duration.'
+seoTitle: 'RS-CONSTRAINT-020: ADD CONSTRAINT without NOT VALID'
 ---
 
 **Namespace:** `RS-CONSTRAINT` · **Code:** `RS-CONSTRAINT-020`

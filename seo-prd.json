@@ -54,7 +54,15 @@
     {
       "id": "SEO-3",
       "title": "Title template: kill 'rowshape | rowshape', keep titles under 60 chars",
-      "status": "open"
+      "status": "done",
+      "iteration": 3,
+      "verified": [
+        "homepage <title> was \"rowshape | rowshape\"; it is now \"rowshape — the type-checker for database migrations\" (50 chars)",
+        "frontmatter seoTitle added to the docs schema (max 60, optional) and applied to all 27 findings pages, which ran 51-110 chars",
+        "longest <title> on the site is now 56 chars; every one of the 49 is unique",
+        "src/starlightRouteData.ts is a Starlight route middleware; where seoTitle is absent behaviour is unchanged, and og:title is deliberately left as the full sentence",
+        "check-build.mjs fails on a missing title, one over 60 chars, one that repeats itself across the delimiter, or two pages sharing one — negative-tested on all three"
+      ]
     },
     {
       "id": "SEO-4",
@@ -74,9 +82,9 @@
     },
     {
       "id": "SEO-7",
-      "title": "Findings pages: search-intent titles and descriptions across all 27 codes",
+      "title": "Findings pages: search-intent descriptions and on-page copy across all 27 codes",
       "status": "open",
-      "note": "Highest long-tail value. Likely spans more than one iteration - split by namespace if so."
+      "note": "Titles were handled in iteration 3 via the seoTitle mechanism. What remains here is the meta descriptions and the on-page problem language."
     },
     {
       "id": "SEO-8",

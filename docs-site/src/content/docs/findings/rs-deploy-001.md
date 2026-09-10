@@ -1,6 +1,7 @@
 ---
 title: 'RS-DEPLOY-001 — Renaming a column or table breaks running code that still uses the old name'
 description: 'The migration is safe and fast — this is not a lock or a data problem.'
+seoTitle: 'RS-DEPLOY-001: renaming a column or table breaks code'
 ---
 
 **Namespace:** `RS-DEPLOY` · **Code:** `RS-DEPLOY-001`

@@ -1,6 +1,7 @@
 ---
 title: 'RS-DATA-020 — FOREIGN KEY validated against pre-existing orphans'
 description: 'Validating a foreign key scans every child row for a matching parent.'
+seoTitle: 'RS-DATA-020: FOREIGN KEY hits pre-existing orphan rows'
 ---
 
 **Namespace:** `RS-DATA` · **Code:** `RS-DATA-020`

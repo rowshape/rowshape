@@ -1,6 +1,7 @@
 ---
 title: 'RS-DATA-001 — SET NOT NULL against existing NULLs'
 description: 'SET NOT NULL scans the table and rejects rows that are NULL.'
+seoTitle: 'RS-DATA-001: SET NOT NULL against existing NULLs'
 ---
 
 **Namespace:** `RS-DATA` · **Code:** `RS-DATA-001`

@@ -21,6 +21,9 @@ export default defineConfig({
 			title: 'rowshape',
 			description:
 				'The type-checker for database migrations — a human and an agent get the same answer through the same contract.',
+			// Decouples the <title> tag from the page heading and de-duplicates the
+			// homepage title. See the file for why both are needed.
+			routeMiddleware: './src/starlightRouteData.ts',
 			social: [
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/rowshape/rowshape' },
 			],

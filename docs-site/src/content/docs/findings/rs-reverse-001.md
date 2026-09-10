@@ -1,6 +1,7 @@
 ---
 title: 'RS-REVERSE-001 — DROP COLUMN loses its data irreversibly'
 description: 'Dropping a column permanently removes its values across every row.'
+seoTitle: 'RS-REVERSE-001: DROP COLUMN loses its data irreversibly'
 ---
 
 **Namespace:** `RS-REVERSE` · **Code:** `RS-REVERSE-001`

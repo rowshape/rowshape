@@ -1,6 +1,7 @@
 ---
 title: 'RS-INDEX-002 — ADD PRIMARY KEY or UNIQUE builds an index under ACCESS EXCLUSIVE'
 description: 'Adding a PRIMARY KEY or UNIQUE constraint over existing data builds a unique index while holding an ACCESS EXCLUSIVE lock — no reads or writes proceed for the whole O(n log n) build, and ADD PRIMARY KEY also scans the column for NULLs.'
+seoTitle: 'RS-INDEX-002: ADD PRIMARY KEY or UNIQUE locks the table'
 ---
 
 **Namespace:** `RS-INDEX` · **Code:** `RS-INDEX-002`

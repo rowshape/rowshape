@@ -1,6 +1,7 @@
 ---
 title: 'RS-INDEX-010 — CREATE UNIQUE INDEX without proven uniqueness'
 description: 'A unique index can only build if the indexed set is actually unique.'
+seoTitle: 'RS-INDEX-010: CREATE UNIQUE INDEX, uniqueness unproven'
 ---
 
 **Namespace:** `RS-INDEX` · **Code:** `RS-INDEX-010`
