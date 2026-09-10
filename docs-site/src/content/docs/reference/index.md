@@ -1,6 +1,6 @@
 ---
 title: "CLI reference"
-description: "Every rowshape command and flag, generated from the binary."
+description: "Every rowshape command and every flag it accepts, generated from the binary itself so the reference cannot drift from what the CLI does."
 sidebar:
   order: 1
 ---

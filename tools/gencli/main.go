@@ -91,6 +91,31 @@ func subcommands(root *cobra.Command) []*cobra.Command {
 
 func pageFile(c *cobra.Command) string { return c.Name() + ".md" }
 
+// docsAnnotation is the cobra annotation key carrying a command's meta
+// description for the docs site.
+const docsAnnotation = "docs.description"
+
+// docsDescription is what the generated page puts in its frontmatter
+// `description`, which becomes the page's meta description and the line a
+// search result shows under the title.
+//
+// It is NOT c.Short. Short is one line of `rowshape --help` output, where terse
+// is correct and where a sentence long enough to be a useful search snippet
+// would be wrong — "Audit a committed fixture" is a good help line and a
+// 25-character meta description that Google will discard in favour of guessing
+// from the page. So a command may carry a longer description under the
+// docs.description annotation, and falls back to Short when it does not.
+//
+// The alternative was lengthening the Short lines, which would have improved the
+// docs by degrading `--help`. This way each surface says what suits it, and
+// both still come from the command tree rather than a second hand-written copy.
+func docsDescription(c *cobra.Command) string {
+	if d, ok := c.Annotations[docsAnnotation]; ok && d != "" {
+		return d
+	}
+	return c.Short
+}
+
 // frontmatter is the Starlight page header. sidebarOrder keeps the reference in
 // workflow order rather than alphabetical.
 func frontmatter(title, description string, sidebarOrder int) string {
@@ -115,7 +140,7 @@ func yamlString(s string) string {
 func indexPage(root *cobra.Command, subs []*cobra.Command) string {
 	var b strings.Builder
 	b.WriteString(frontmatter("CLI reference",
-		"Every rowshape command and flag, generated from the binary.", 1))
+		"Every rowshape command and every flag it accepts, generated from the binary itself so the reference cannot drift from what the CLI does.", 1))
 
 	b.WriteString("This reference is generated from the command tree, so it lists exactly the\n")
 	b.WriteString("commands and flags this version of `rowshape` accepts. If a flag is missing\n")
@@ -149,7 +174,7 @@ func indexPage(root *cobra.Command, subs []*cobra.Command) string {
 
 func commandPage(c *cobra.Command, order int) string {
 	var b strings.Builder
-	b.WriteString(frontmatter("rowshape "+c.Name(), c.Short, order))
+	b.WriteString(frontmatter("rowshape "+c.Name(), docsDescription(c), order))
 
 	if c.Long != "" {
 		b.WriteString(c.Long)
@@ -239,7 +264,7 @@ func actionPage(repoRoot string) (string, error) {
 	text = strings.TrimLeft(strings.Join(lines, "\n"), "\n")
 
 	var b strings.Builder
-	b.WriteString(frontmatter(title, "Run rowshape in CI and gate merges on the verdict.", 99))
+	b.WriteString(frontmatter(title, "Run rowshape validate in GitHub Actions and gate a pull request on the verdict, with findings annotated inline on the lines that caused them.", 99))
 	b.WriteString("{/* Generated from docs/action.md by `go run ./tools/gencli` — edit that file. */}\n\n")
 	b.WriteString(text)
 	if !strings.HasSuffix(text, "\n") {

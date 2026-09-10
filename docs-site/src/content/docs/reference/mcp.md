@@ -1,6 +1,6 @@
 ---
 title: "rowshape mcp"
-description: "Run rowshape as an MCP server (stdio) for agents"
+description: "Run rowshape as a Model Context Protocol server over stdio, exposing the shape and the verdict to an agent inside its own turn."
 sidebar:
   order: 7
 ---

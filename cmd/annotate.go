@@ -24,6 +24,12 @@ func newAnnotateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "annotate [verdict.json]",
 		Short: "Render a JSON verdict as GitHub PR annotations + a check summary",
+		// The meta description for the generated docs page. Deliberately longer
+		// than Short: Short is a line of --help output, this is the sentence a
+		// search result shows. See docsDescription in tools/gencli.
+		Annotations: map[string]string{
+			"docs.description": "Render a rowshape JSON verdict as GitHub pull-request annotations and a Markdown check summary, inline on the failing lines.",
+		},
 		Long: "annotate reads a JSON verdict (from `rowshape validate --json`) on a\n" +
 			"file argument or stdin and renders it into GitHub's PR surface:\n" +
 			"inline file/line annotations on stdout and a Markdown check summary to\n" +

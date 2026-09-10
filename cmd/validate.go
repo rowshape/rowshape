@@ -51,6 +51,12 @@ func newValidateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "validate [rowshape.yaml]",
 		Short: "Validate a migration against production-shaped data; return a verdict",
+		// The meta description for the generated docs page. Deliberately longer
+		// than Short: Short is a line of --help output, this is the sentence a
+		// search result shows. See docsDescription in tools/gencli.
+		Annotations: map[string]string{
+			"docs.description": "Validate a migration against production-shaped data in a disposable PostgreSQL and return a verdict: which lock, how long, which rows break it.",
+		},
 		Long: "validate hydrates a disposable Postgres from the fixture, applies the\n" +
 			"migration set through your own runner, captures what happened (locks,\n" +
 			"durations, rows, constraint violations, index builds), and returns a\n" +

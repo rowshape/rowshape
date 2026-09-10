@@ -1,6 +1,6 @@
 ---
 title: "The rowshape GitHub Action"
-description: "Run rowshape in CI and gate merges on the verdict."
+description: "Run rowshape validate in GitHub Actions and gate a pull request on the verdict, with findings annotated inline on the lines that caused them."
 sidebar:
   order: 99
 ---

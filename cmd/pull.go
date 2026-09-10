@@ -44,6 +44,12 @@ func newPullCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pull [connection-url]",
 		Short: "Read a database's shape (read-only) and emit rowshape.yaml",
+		// The meta description for the generated docs page. Deliberately longer
+		// than Short: Short is a line of --help output, this is the sentence a
+		// search result shows. See docsDescription in tools/gencli.
+		Annotations: map[string]string{
+			"docs.description": "Read a PostgreSQL database's structure and statistical shape through catalog views only, never your rows, and write a committable fixture.",
+		},
 		Long: "pull reads a database's structure and statistical shape through catalog\n" +
 			"views only — never SELECT * on user tables — and writes a committable,\n" +
 			"value-free rowshape.yaml. It requires a read-only role and refuses to run\n" +

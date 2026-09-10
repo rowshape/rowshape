@@ -30,6 +30,12 @@ func newVerifyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "verify [rowshape.yaml]",
 		Short: "Read-only check that a live target matches the intended schema (drift)",
+		// The meta description for the generated docs page. Deliberately longer
+		// than Short: Short is a line of --help output, this is the sentence a
+		// search result shows. See docsDescription in tools/gencli.
+		Annotations: map[string]string{
+			"docs.description": "Check a live database against the schema you intended, read-only, and report the drift between what is deployed and what is committed.",
+		},
 		Long: "verify reads a live target's schema (read-only) and compares it to the\n" +
 			"schema a fixture declares: tables, columns, nullability, and constraints.\n" +
 			"It writes nothing. It exits 0 when reality matches intent, 1 on drift.",

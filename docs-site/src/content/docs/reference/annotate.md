@@ -1,6 +1,6 @@
 ---
 title: "rowshape annotate"
-description: "Render a JSON verdict as GitHub PR annotations + a check summary"
+description: "Render a rowshape JSON verdict as GitHub pull-request annotations and a Markdown check summary, inline on the failing lines."
 sidebar:
   order: 2
 ---

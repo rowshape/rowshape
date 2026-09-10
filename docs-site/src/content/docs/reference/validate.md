@@ -1,6 +1,6 @@
 ---
 title: "rowshape validate"
-description: "Validate a migration against production-shaped data; return a verdict"
+description: "Validate a migration against production-shaped data in a disposable PostgreSQL and return a verdict: which lock, how long, which rows break it."
 sidebar:
   order: 10
 ---

@@ -1,6 +1,6 @@
 ---
 title: "rowshape inspect"
-description: "Audit a committed fixture"
+description: "Audit a committed rowshape fixture: every field derived from row values, its source column, and the privacy level at which it appears."
 sidebar:
   order: 6
 ---
