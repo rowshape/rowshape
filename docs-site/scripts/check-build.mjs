@@ -671,6 +671,37 @@ async function checkHeadings(pages) {
 	return problems;
 }
 
+/**
+ * noindex, exactly where it belongs and nowhere else.
+ *
+ * The 404 page is served for missing paths with a real 404 status, but it also
+ * lives at its own URL: /404 returns 200 (verified against the live site), which
+ * is a soft 404 — an indexable page whose whole content is "this is not a page".
+ * noindex is the remedy.
+ *
+ * The opposite mistake is far more expensive and far quieter: a stray noindex on
+ * a real page removes it from search entirely, and nothing about the page looks
+ * wrong. So this asserts both directions.
+ */
+async function checkNoindex(pages) {
+	const problems = [];
+	for (const page of pages) {
+		const rel = page.replace(/\\/g, '/');
+		const html = await readFile(page, 'utf8');
+		const robots = html.match(/<meta name="robots" content="([^"]*)"/)?.[1] ?? '';
+		const noindexed = /noindex/i.test(robots);
+		const is404 = rel === 'dist/404.html';
+
+		if (is404 && !noindexed) {
+			problems.push(`${rel}: the 404 page must be noindex — /404 returns 200 and is otherwise indexable`);
+		}
+		if (!is404 && noindexed) {
+			problems.push(`${rel}: noindex on a real page removes it from search entirely`);
+		}
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -698,9 +729,15 @@ async function main() {
 	const catalog = await checkCatalogCoverage(pages);
 	const llms = await checkLlmsTxt();
 	const headings = await checkHeadings(pages);
+	const noindex = await checkNoindex(pages);
 	const selfLinks = await checkSelfLinks(pages);
 
 	let failed = false;
+	if (noindex.length) {
+		failed = true;
+		console.error(`${noindex.length} indexability problem(s):`);
+		for (const n of noindex) console.error(`  ${n}`);
+	}
 	if (headings.length) {
 		failed = true;
 		console.error(`${headings.length} heading problem(s):`);
@@ -771,7 +808,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, one meaningful h1 per page, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, one meaningful h1 per page, noindex only on the 404, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
 }
 
 await main();
