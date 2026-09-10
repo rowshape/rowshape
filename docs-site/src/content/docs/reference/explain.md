@@ -1,6 +1,6 @@
 ---
 title: "rowshape explain"
-description: "Explain a finding code (docs + remediation), agent-readable"
+description: "Look up a rowshape finding code and get its documentation and mandatory remediation: the same text a verdict carries, for a human or an agent."
 sidebar:
   order: 3
 ---

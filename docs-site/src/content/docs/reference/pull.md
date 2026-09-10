@@ -1,6 +1,6 @@
 ---
 title: "rowshape pull"
-description: "Read a database's shape (read-only) and emit rowshape.yaml"
+description: "Read a PostgreSQL database's structure and statistical shape through catalog views only, never your rows, and write a committable fixture."
 sidebar:
   order: 9
 ---

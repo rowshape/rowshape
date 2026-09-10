@@ -1,6 +1,6 @@
 ---
 title: "rowshape plan"
-description: "Dry-run diff of a migration against a live target (read-only, applies nothing)"
+description: "Dry-run a migration against a live target and diff what it would change. Read-only: it applies nothing and takes no locks on your database."
 sidebar:
   order: 8
 ---

@@ -32,6 +32,12 @@ func newHydrateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hydrate [rowshape.yaml]",
 		Short: "Reconstruct a deterministic disposable database from rowshape.yaml",
+		// The meta description for the generated docs page. Deliberately longer
+		// than Short: Short is a line of --help output, this is the sentence a
+		// search result shows. See docsDescription in tools/gencli.
+		Annotations: map[string]string{
+			"docs.description": "Rebuild a disposable PostgreSQL from a rowshape fixture: rows whose shape matches production, with obviously-fake content, reproducible from a seed.",
+		},
 		Long: "hydrate synthesizes rows whose SHAPE matches production — row counts,\n" +
 			"null fractions, cardinality, fan-out — with obviously-fake content. The\n" +
 			"same fixture, seed, and engine version produce identical output on any\n" +

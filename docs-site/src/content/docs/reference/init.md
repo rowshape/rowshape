@@ -1,6 +1,6 @@
 ---
 title: "rowshape init"
-description: "Scaffold rowshape config in the current repo (offline detection only)"
+description: "Detect your database engine and migration runner from the repo layout and write a starter rowshape.toml. No network, no database connection."
 sidebar:
   order: 5
 ---

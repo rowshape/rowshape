@@ -1,6 +1,7 @@
 ---
 title: 'RS-DEPLOY-002 — Changing REPLICA IDENTITY changes what downstream consumers can identify'
 description: 'REPLICA IDENTITY controls what a logical decoding stream can identify a changed row BY.'
+seoTitle: 'RS-DEPLOY-002: REPLICA IDENTITY change breaks consumers'
 ---
 
 **Namespace:** `RS-DEPLOY` · **Code:** `RS-DEPLOY-002`

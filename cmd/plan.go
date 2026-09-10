@@ -28,6 +28,12 @@ func newPlanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Dry-run diff of a migration against a live target (read-only, applies nothing)",
+		// The meta description for the generated docs page. Deliberately longer
+		// than Short: Short is a line of --help output, this is the sentence a
+		// search result shows. See docsDescription in tools/gencli.
+		Annotations: map[string]string{
+			"docs.description": "Dry-run a migration against a live target and diff what it would change. Read-only: it applies nothing and takes no locks on your database.",
+		},
 		Long: "plan reads a live target's current schema (read-only) and reports what\n" +
 			"each migration statement would change against it — a dry run that applies\n" +
 			"nothing. Point --against at the target and -m at a .sql file or directory.",

@@ -1,6 +1,7 @@
 ---
 title: 'RS-INDEX-001 — Non-concurrent CREATE INDEX blocks writes'
 description: 'A plain CREATE INDEX holds a lock that blocks writes for the whole O(n log n) build.'
+seoTitle: 'RS-INDEX-001: non-concurrent CREATE INDEX blocks writes'
 ---
 
 **Namespace:** `RS-INDEX` · **Code:** `RS-INDEX-001`

@@ -19,6 +19,12 @@ func newInspectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inspect [rowshape.yaml]",
 		Short: "Audit a committed fixture",
+		// The meta description for the generated docs page. Deliberately longer
+		// than Short: Short is a line of --help output, this is the sentence a
+		// search result shows. See docsDescription in tools/gencli.
+		Annotations: map[string]string{
+			"docs.description": "Audit a committed rowshape fixture: every field derived from row values, its source column, and the privacy level at which it appears.",
+		},
 		Long: "inspect --leaks enumerates every field in a fixture derived from row\n" +
 			"values — numeric/temporal ranges, histogram bounds, value sets and\n" +
 			"frequencies, verbatim CHECK expressions, and free-text max length — with\n" +

@@ -43,6 +43,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Full history: the sitemap's <lastmod> and each page's dateModified
+          # are the git commit date of that page's source. The default shallow
+          # checkout leaves one commit, which would give every page the same
+          # date and tell crawlers the whole site changed on every deploy.
+          # scripts/gen-lastmod.mjs refuses to run against a shallow clone
+          # rather than emitting that, so without this the build fails loudly.
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -72,6 +80,14 @@ jobs:
       deployments: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Full history: the sitemap's <lastmod> and each page's dateModified
+          # are the git commit date of that page's source. The default shallow
+          # checkout leaves one commit, which would give every page the same
+          # date and tell crawlers the whole site changed on every deploy.
+          # scripts/gen-lastmod.mjs refuses to run against a shallow clone
+          # rather than emitting that, so without this the build fails loudly.
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22

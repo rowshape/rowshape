@@ -15,6 +15,12 @@ func newMCPCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "mcp",
 		Short: "Run rowshape as an MCP server (stdio) for agents",
+		// The meta description for the generated docs page. Deliberately longer
+		// than Short: Short is a line of --help output, this is the sentence a
+		// search result shows. See docsDescription in tools/gencli.
+		Annotations: map[string]string{
+			"docs.description": "Run rowshape as a Model Context Protocol server over stdio, exposing the shape and the verdict to an agent inside its own turn.",
+		},
 		Long: "mcp starts a Model Context Protocol server over stdio, exposing rowshape's\n" +
 			"four tools (describe_shape, validate_migration, explain_finding,\n" +
 			"plan_against) to an agent. Point your MCP client at `rowshape mcp`.",

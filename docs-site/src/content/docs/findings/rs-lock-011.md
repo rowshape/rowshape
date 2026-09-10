@@ -1,6 +1,7 @@
 ---
 title: 'RS-LOCK-011 — Several statements take ACCESS EXCLUSIVE on the same table'
-description: 'Each lock acquisition queues independently, so the table is unavailable across the whole sequence rather than for the duration of the longest single statement — and between them, traffic that built up during one lock competes for the next.'
+description: 'Each lock is acquired separately, so the table is unavailable across the whole sequence rather than for the longest single statement.'
+seoTitle: 'RS-LOCK-011: repeated ACCESS EXCLUSIVE on one table'
 ---
 
 **Namespace:** `RS-LOCK` · **Code:** `RS-LOCK-011`

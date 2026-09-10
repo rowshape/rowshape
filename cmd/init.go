@@ -20,6 +20,12 @@ func newInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Scaffold rowshape config in the current repo (offline detection only)",
+		// The meta description for the generated docs page. Deliberately longer
+		// than Short: Short is a line of --help output, this is the sentence a
+		// search result shows. See docsDescription in tools/gencli.
+		Annotations: map[string]string{
+			"docs.description": "Detect your database engine and migration runner from the repo layout and write a starter rowshape.toml. No network, no database connection.",
+		},
 		Long: "init detects your database engine and migration runner from the repo\n" +
 			"layout and writes a starter " + configFile + ". It makes no network or\n" +
 			"database connection. Re-running it leaves an existing config untouched\n" +

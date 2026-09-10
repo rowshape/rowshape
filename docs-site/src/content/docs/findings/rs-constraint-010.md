@@ -1,6 +1,7 @@
 ---
 title: 'RS-CONSTRAINT-010 — CHECK constraint conflicts with existing data'
 description: 'The column''s profiled range violates the CHECK predicate, so existing rows already fail it and adding the constraint (or validating it) fails.'
+seoTitle: 'RS-CONSTRAINT-010: CHECK conflicts with existing data'
 ---
 
 **Namespace:** `RS-CONSTRAINT` · **Code:** `RS-CONSTRAINT-010`

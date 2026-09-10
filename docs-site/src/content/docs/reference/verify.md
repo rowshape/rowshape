@@ -1,6 +1,6 @@
 ---
 title: "rowshape verify"
-description: "Read-only check that a live target matches the intended schema (drift)"
+description: "Check a live database against the schema you intended, read-only, and report the drift between what is deployed and what is committed."
 sidebar:
   order: 11
 ---

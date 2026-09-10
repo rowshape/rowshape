@@ -1,6 +1,7 @@
 ---
 title: 'RS-DEPLOY-003 — Dropping NOT NULL withdraws a guarantee running code relies on'
-description: 'The migration is instant and safe for the database.'
+description: 'Dropping NOT NULL is instant for the database, but it withdraws a guarantee that application code, ORMs and downstream schemas were written against.'
+seoTitle: 'RS-DEPLOY-003: dropping NOT NULL breaks running code'
 ---
 
 **Namespace:** `RS-DEPLOY` · **Code:** `RS-DEPLOY-003`

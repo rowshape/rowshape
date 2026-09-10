@@ -1,9 +1,14 @@
 ---
 title: rowshape
-description: The type-checker for database migrations — a human and an agent get the same answer through the same contract.
+description: >-
+  The type-checker for PostgreSQL migrations: check a proposed schema change against your production data's shape and get a machine-readable verdict.
 template: splash
 hero:
-  tagline: Execute a proposed schema change against production-shaped data in a disposable environment, and get back a machine-readable verdict.
+  # The h1. It was the bare word "rowshape", which is the one thing a reader who
+  # found this page already knows and the one thing a reader who has not heard of
+  # it cannot use. The brand is in the site header two lines above.
+  title: The type-checker for PostgreSQL migrations
+  tagline: Execute a proposed schema change against your production data's shape in a disposable PostgreSQL, and get back a machine-readable verdict — before the migration reaches production.
   actions:
     - text: Install
       link: /install/
@@ -20,9 +25,15 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 A migration that passes every test on a dev database with twelve rows in it can
 still take production down. `SET NOT NULL` on a column that is 3% null fails on
-contact. A cascade delete on a foreign key with a long fan-out tail is an outage,
-not a cleanup. The shape of the data decides the answer, and the shape is exactly
-what a dev database does not have.
+contact. `CREATE INDEX` without `CONCURRENTLY` blocks every write to the table
+for the length of the build. A cascade delete on a foreign key with a long
+fan-out tail is an outage, not a cleanup. The shape of the data decides the
+answer, and the shape is exactly what a dev database does not have.
+
+rowshape checks a PostgreSQL migration against that shape before it runs, and
+tells you which lock it takes, how long it holds it, and which existing rows
+will make it fail. MySQL is on the roadmap, behind the fixture spec's
+vocabulary; today the answer is Postgres.
 
 <CardGrid>
 	<Card title="Shape, not rows">

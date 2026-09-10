@@ -21,6 +21,12 @@ func newExplainCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "explain [CODE]",
 		Short: "Explain a finding code (docs + remediation), agent-readable",
+		// The meta description for the generated docs page. Deliberately longer
+		// than Short: Short is a line of --help output, this is the sentence a
+		// search result shows. See docsDescription in tools/gencli.
+		Annotations: map[string]string{
+			"docs.description": "Look up a rowshape finding code and get its documentation and mandatory remediation: the same text a verdict carries, for a human or an agent.",
+		},
 		Long: "explain returns structured documentation and the mandatory remediation\n" +
 			"for a finding code (e.g. rowshape explain RS-LOCK-001). With no argument it\n" +
 			"lists every code. The text is identical to the remediation the finding\n" +

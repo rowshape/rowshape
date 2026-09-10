@@ -1,6 +1,6 @@
 ---
 title: "rowshape hydrate"
-description: "Reconstruct a deterministic disposable database from rowshape.yaml"
+description: "Rebuild a disposable PostgreSQL from a rowshape fixture: rows whose shape matches production, with obviously-fake content, reproducible from a seed."
 sidebar:
   order: 4
 ---
