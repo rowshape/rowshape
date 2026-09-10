@@ -414,11 +414,59 @@ async function checkStructuredData(pages) {
 		}
 	}
 
-	// The homepage is the one page that must carry it.
-	const home = pages.find((p) => p.replace(/\\/g, '/') === 'dist/index.html');
-	if (home && !(await readFile(home, 'utf8')).includes('application/ld+json')) {
-		problems.push('dist/index.html: no JSON-LD — the homepage should describe the software');
+	// Coverage, not just validity. Every content page carries structured data:
+	// the homepage describes the software, everything else describes where it
+	// sits (BreadcrumbList) and what it is (TechArticle). The 404 carries none,
+	// deliberately — it is not a document, and it is out of the sitemap for the
+	// same reason.
+	for (const page of pages) {
+		const rel = page.replace(/\\/g, '/');
+		const html = await readFile(page, 'utf8');
+		const has = (type) => html.includes(`"@type":"${type}"`);
+		const isHome = rel === 'dist/index.html';
+		const is404 = rel === 'dist/404.html';
+
+		if (is404) {
+			if (html.includes('application/ld+json')) {
+				problems.push(`${rel}: the 404 page should carry no structured data`);
+			}
+			continue;
+		}
+		if (isHome) {
+			if (!has('SoftwareApplication')) problems.push(`${rel}: no SoftwareApplication`);
+			continue;
+		}
+		if (!has('BreadcrumbList')) problems.push(`${rel}: no BreadcrumbList`);
+		if (!has('TechArticle')) problems.push(`${rel}: no TechArticle`);
+
+		// A breadcrumb whose positions are not 1..n, or whose trail does not end
+		// at the page it is on, is worse than none: it describes a site structure
+		// that is not there.
+		const m = html.match(/<script type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/);
+		if (!m) continue;
+		let graph;
+		try {
+			graph = JSON.parse(m[1])['@graph'] ?? [];
+		} catch {
+			continue; // already reported above
+		}
+		const crumb = graph.find((n) => n['@type'] === 'BreadcrumbList');
+		if (!crumb) continue;
+		const items = crumb.itemListElement ?? [];
+		items.forEach((item, i) => {
+			if (item.position !== i + 1) {
+				problems.push(`${rel}: breadcrumb position ${item.position} at index ${i}`);
+			}
+		});
+		const route = '/' + rel.replace(/^dist\//, '').replace(/index\.html$/, '');
+		const last = items[items.length - 1];
+		if (last && new URL(last.item).pathname !== route) {
+			problems.push(
+				`${rel}: breadcrumb ends at ${new URL(last.item).pathname}, not at ${route}`
+			);
+		}
 	}
+
 	if (found === 0) problems.push('no JSON-LD anywhere in dist/');
 	return problems;
 }
@@ -496,7 +544,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
 }
 
 await main();

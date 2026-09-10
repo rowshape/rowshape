@@ -95,7 +95,15 @@
     {
       "id": "SEO-6",
       "title": "JSON-LD BreadcrumbList + TechArticle on docs pages",
-      "status": "open"
+      "status": "done",
+      "iteration": 6,
+      "verified": [
+        "all 47 docs pages emit BreadcrumbList + TechArticle; homepage keeps SoftwareApplication; the 404 carries none, matching its exclusion from the sitemap",
+        "trails read rowshape > Findings > RS-LOCK-001, and a section index page is its section rather than its own child",
+        "a new top-level section with no label in SECTIONS FAILS THE BUILD rather than emitting a raw slug — negative-tested by adding a /faq/ page and watching the build refuse it",
+        "check-build.mjs also verifies breadcrumb positions are 1..n and that the trail ends at the page it is on — negative-tested by rewriting a position",
+        "TechArticle deliberately carries no datePublished/dateModified: both need the git commit date of the source, which the middleware cannot reach. SEO-11 adds them. An absent date is valid, an invented one is not."
+      ]
     },
     {
       "id": "SEO-7",
@@ -121,7 +129,8 @@
     {
       "id": "SEO-11",
       "title": "Sitemap serialize: lastmod from git, and drop non-content routes",
-      "status": "open"
+      "status": "open",
+      "note": "Also supplies dateModified for the TechArticle nodes added in iteration 6 — same git-date map, two consumers."
     },
     {
       "id": "SEO-12",

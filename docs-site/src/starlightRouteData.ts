@@ -83,6 +83,106 @@ function homepageJsonLd(description: string) {
  *    is right to be a full sentence; the title tag is not. `seoTitle` in
  *    frontmatter decouples them, and where it is absent nothing changes.
  */
+/**
+ * The label each top-level section is known by, keyed by its URL segment.
+ *
+ * These mirror the sidebar groups in astro.config.mjs. They are written out
+ * rather than read from the sidebar because a breadcrumb needs a URL for each
+ * step and the sidebar config carries labels for groups that have none — and
+ * because a section added without a label here should fail the build rather
+ * than silently emit a breadcrumb with a raw slug in it. Every section listed
+ * has an index page at /<segment>/, which is what makes the trail clickable.
+ */
+const SECTIONS: Record<string, string> = {
+	install: 'Install',
+	reference: 'CLI reference',
+	findings: 'Findings',
+	privacy: 'Privacy',
+	fidelity: 'Fidelity',
+	agent: 'Agents & MCP',
+	spec: 'Fixture spec',
+};
+
+/**
+ * Structured data for a documentation page: where it sits, and what it is.
+ *
+ * BreadcrumbList is what lets a result show `rowshape.com › Findings ›
+ * RS-LOCK-001` instead of a bare URL, and it tells a crawler the site has a
+ * shape rather than 49 unrelated pages. TechArticle is the honest type for
+ * this content — not Article, which is for editorial, and not FAQPage, which
+ * these pages are not.
+ *
+ * There is no datePublished or dateModified yet. Both are real signals and both
+ * need the git commit date of the source file, which this middleware has no way
+ * to reach; the sitemap story that computes that map (seo-prd.json SEO-11) is
+ * where they get added. An absent date is valid; a made-up one is not.
+ */
+function docPageJsonLd(
+	pathname: string,
+	title: string,
+	description: string | undefined,
+	siteTitle: string
+) {
+	const segments = pathname.split('/').filter(Boolean);
+	const url = new URL(pathname, SITE).href;
+
+	const trail: { name: string; item: string }[] = [{ name: siteTitle, item: `${SITE}/` }];
+	const section = segments[0];
+	if (section) {
+		const label = SECTIONS[section];
+		if (!label) {
+			// Loud on purpose. A new top-level section is a content decision that
+			// should be reflected here, and a breadcrumb reading "faq" instead of
+			// "Frequently asked questions" is the kind of thing nobody notices.
+			throw new Error(
+				`No breadcrumb label for section "${section}" (${pathname}) — add it to SECTIONS in src/starlightRouteData.ts`
+			);
+		}
+		trail.push({ name: label, item: `${SITE}/${section}/` });
+	}
+	// A section index page IS its section: do not repeat it as its own child.
+	const isSectionIndex = segments.length === 1;
+	if (!isSectionIndex && segments.length > 0) {
+		trail.push({ name: title, item: url });
+	}
+
+	const graph: Record<string, unknown>[] = [
+		{
+			'@type': 'BreadcrumbList',
+			'@id': `${url}#breadcrumb`,
+			itemListElement: trail.map((step, i) => ({
+				'@type': 'ListItem',
+				position: i + 1,
+				name: step.name,
+				item: step.item,
+			})),
+		},
+		{
+			'@type': 'TechArticle',
+			'@id': `${url}#article`,
+			// Google truncates a headline past ~110 characters. The page title is
+			// the headline here, and the findings titles run to 96.
+			headline: title.slice(0, 110),
+			...(description ? { description } : {}),
+			url,
+			inLanguage: 'en',
+			isPartOf: { '@id': `${SITE}/#website` },
+			publisher: { '@id': `${SITE}/#organization` },
+			about: { '@id': `${SITE}/#software` },
+		},
+	];
+
+	return { '@context': 'https://schema.org', '@graph': graph };
+}
+
+/** Serialize a JSON-LD graph for inline embedding in a script tag. */
+function serializeJsonLd(data: unknown): string {
+	// JSON.stringify cannot emit a bare "</script>", but a "<" in any string
+	// value would still be raw HTML inside a script element, so the one character
+	// that can break out is escaped.
+	return JSON.stringify(data).replace(/</g, '\\u003c');
+}
+
 export const onRequest = defineRouteMiddleware((context) => {
 	const { starlightRoute } = context.locals;
 	const { entry, siteTitle, head } = starlightRoute;
@@ -111,17 +211,24 @@ export const onRequest = defineRouteMiddleware((context) => {
 		if (tag.tag === 'title') tag.content = title;
 	}
 
+	// The homepage describes the software; every other page describes where it
+	// sits and what it is. The 404 gets neither: it is not a document, and it is
+	// excluded from the sitemap for the same reason.
+	const is404 = context.url.pathname.replace(/\/$/, '') === '/404';
 	if (isSiteRoot) {
-		const description =
-			data.description ?? 'The type-checker for database migrations.';
+		const description = data.description ?? 'The type-checker for database migrations.';
 		head.push({
 			tag: 'script',
 			attrs: { type: 'application/ld+json' },
-			// JSON.stringify cannot emit a bare "</script>", but a description
-			// containing "<" would still be raw HTML inside a script element, so the
-			// one character that can break out is escaped. Cheap, and it means a
-			// future edit to the frontmatter cannot silently corrupt the page.
-			content: JSON.stringify(homepageJsonLd(description)).replace(/</g, '\\u003c'),
+			content: serializeJsonLd(homepageJsonLd(description)),
+		});
+	} else if (!is404) {
+		head.push({
+			tag: 'script',
+			attrs: { type: 'application/ld+json' },
+			content: serializeJsonLd(
+				docPageJsonLd(context.url.pathname, data.title, data.description, siteTitle)
+			),
 		});
 	}
 	// og:title is deliberately left alone. It is the share-card headline, where
