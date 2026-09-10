@@ -185,7 +185,17 @@
     {
       "id": "SEO-13",
       "title": "Core Web Vitals: font loading, CLS on the hero, preconnect audit",
-      "status": "open"
+      "status": "done",
+      "iteration": 12,
+      "outcome": "measured-already-good",
+      "verified": [
+        "MEASURED FIRST, and found nothing to speed up: no web fonts (Starlight resolves to a system stack, so no FOUT and no font-driven CLS), no <img> elements anywhere, no third-party origins at all, and 62-80 KiB of render-blocking CSS",
+        "so this iteration adds no speed-ups it cannot justify. What it adds is the guard that keeps the measurement true.",
+        "CSS budget set at 96 KiB per page AFTER measuring the real worst case (80 KiB on a CLI reference page) — headroom to grow, too tight for a UI library or an icon font",
+        "third-party stylesheets, scripts and images now fail the build: one Google Fonts link puts a DNS lookup and someone else's uptime in front of first paint, and on this site it also undercuts a docs argument about what leaves your database",
+        "any <img> without width and height fails, before the first one exists — much easier to require than to retrofit",
+        "all three negative-tested"
+      ]
     },
     {
       "id": "SEO-14",

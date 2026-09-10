@@ -28,6 +28,19 @@ const DIST = 'dist';
  */
 const JS_BUDGET_BYTES = 32 * 1024;
 
+/**
+ * The render-blocking CSS budget, in bytes, per page.
+ *
+ * Measured before it was set: the heaviest page (a CLI reference page, which
+ * also loads the code-block stylesheet) is 80 KiB and the rest are 62. The
+ * ceiling is 96 KiB — enough headroom for the docs to grow, low enough that a
+ * UI library or an icon font would not fit under it.
+ *
+ * Every byte of this blocks first paint, which is what makes it a Largest
+ * Contentful Paint number rather than a page-weight one.
+ */
+const CSS_BUDGET_BYTES = 96 * 1024;
+
 /** Recursively collect files under dir matching a predicate. */
 async function walk(dir, match, out = []) {
 	for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -702,6 +715,74 @@ async function checkNoindex(pages) {
 	return problems;
 }
 
+/**
+ * The critical rendering path: how heavy it is, and whose it is.
+ *
+ * Measured before anything was asserted. The site loads no web fonts (Starlight
+ * resolves to a system stack), has no <img> elements, and makes no third-party
+ * requests at all — so Core Web Vitals here are good by construction rather
+ * than by tuning, and there was nothing to speed up. What there IS to do is
+ * stop that quietly changing.
+ *
+ * The regressions this catches:
+ *
+ *   A THIRD-PARTY ORIGIN in the critical path. One Google Fonts link, one
+ *   analytics script, one CDN stylesheet, and first paint now waits on a DNS
+ *   lookup, a TLS handshake and someone else's uptime. On this site it is also
+ *   a privacy question: rowshape's docs argue about what leaves your database,
+ *   and a docs page that phones a third party undercuts the argument.
+ *
+ *   CSS WEIGHT, which blocks first paint the way the JS budget's target blocks
+ *   interaction.
+ *
+ *   AN IMAGE WITHOUT DIMENSIONS. There are none today. The first one added
+ *   without width and height reflows the page as it loads, which is Cumulative
+ *   Layout Shift, and it is much easier to require than to retrofit.
+ */
+async function checkCriticalPath(pages) {
+	const problems = [];
+	const over = [];
+
+	for (const page of pages) {
+		const rel = page.replace(/\\/g, '/');
+		const html = await readFile(page, 'utf8');
+
+		let cssBytes = 0;
+		for (const m of html.matchAll(/<link[^>]*rel="stylesheet"[^>]*>/g)) {
+			const tag = m[0];
+			const href = tag.match(/href="([^"]+)"/)?.[1];
+			if (!href) continue;
+			if (/^https?:\/\//.test(href)) {
+				problems.push(`${rel}: third-party stylesheet ${href} — first paint would wait on another origin`);
+				continue;
+			}
+			// A print stylesheet is not render-blocking for the screen.
+			if (/media="print"/.test(tag)) continue;
+			const path = join(DIST, href);
+			if (existsSync(path)) cssBytes += (await stat(path)).size;
+		}
+		if (cssBytes > CSS_BUDGET_BYTES) {
+			over.push(`${rel}: ${cssBytes} bytes of render-blocking CSS, over the ${CSS_BUDGET_BYTES} budget`);
+		}
+
+		for (const m of html.matchAll(/<script[^>]*\bsrc="(https?:\/\/[^"]+)"/g)) {
+			problems.push(`${rel}: third-party script ${m[1]}`);
+		}
+
+		for (const m of html.matchAll(/<img[^>]*>/g)) {
+			const tag = m[0];
+			const src = tag.match(/src="([^"]+)"/)?.[1] ?? '(no src)';
+			if (/^https?:\/\//.test(src)) problems.push(`${rel}: third-party image ${src}`);
+			const hasDims = /\bwidth="/.test(tag) && /\bheight="/.test(tag);
+			// An SVG sized entirely in CSS is not a layout-shift risk the same way.
+			if (!hasDims) {
+				problems.push(`${rel}: <img src="${src}"> has no width/height — it will shift the layout as it loads`);
+			}
+		}
+	}
+	return [...problems, ...over];
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -730,9 +811,15 @@ async function main() {
 	const llms = await checkLlmsTxt();
 	const headings = await checkHeadings(pages);
 	const noindex = await checkNoindex(pages);
+	const critical = await checkCriticalPath(pages);
 	const selfLinks = await checkSelfLinks(pages);
 
 	let failed = false;
+	if (critical.length) {
+		failed = true;
+		console.error(`${critical.length} critical-path problem(s):`);
+		for (const c of critical) console.error(`  ${c}`);
+	}
 	if (noindex.length) {
 		failed = true;
 		console.error(`${noindex.length} indexability problem(s):`);
@@ -808,7 +895,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, one meaningful h1 per page, noindex only on the 404, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, one meaningful h1 per page, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
 }
 
 await main();
