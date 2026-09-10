@@ -213,7 +213,14 @@
     {
       "id": "SEO-15",
       "title": "Rollup: re-run the full audit against the built site and close or re-open every story",
-      "status": "open"
+      "status": "done",
+      "iteration": 15,
+      "verified": [
+        "clean-room verification from rm -rf dist node_modules src/generated + npm ci, which FAILED and found two defects I had introduced",
+        "DEFECT 1 (iteration 7): `npm run verify` ran `astro build` directly, skipping the lastmod generator that `npm run build` runs. A fresh checkout could not build, because astro.config imports the generated file. verify now chains npm run build.",
+        "DEFECT 2 (iteration 8): markdown.remarkPlugins is deprecated in Astro 7. Moved to markdown.processor: unified({...}), which is the supported path AND the one Starlight reads to push its own plugins onto — verified that code blocks still render and the finding-code autolinking still works.",
+        "final state, measured from the built site: 49 pages; longest title 56 chars; descriptions 70-148; 48 pages with JSON-LD and 47 with breadcrumbs; 48 sitemap URLs, all 48 with a git lastmod; 47 llms.txt entries; robots.txt and og.png present"
+      ]
     },
     {
       "id": "SEO-16",
@@ -242,5 +249,37 @@
       "severity": "high",
       "detail": "https://rowshape.com/robots.txt today returns 24 lines of Cloudflare Content Signals Policy boilerplate: ALL COMMENTS, with no User-agent, no Allow/Disallow, and NO Sitemap line. It is not from this repo — dist/ had no robots.txt at all before iteration 1, so Cloudflare served its own. Two consequences: (1) the site currently advertises no sitemap to any crawler, and (2) it is unverified from here whether deploying our dist/robots.txt replaces that file or whether Cloudflare appends its content-signal block to ours. This is a zone-level dashboard setting on the owner's Cloudflare account, not something the repo can change. NEXT STEP: after this branch deploys, re-fetch https://rowshape.com/robots.txt and confirm the Sitemap line and the /pagefind/ Disallow are present. If they are not, the managed robots.txt feature has to be turned off in Cloudflare, or the content signals adopted deliberately inside our own file — which is a rights decision for the owner, not an implementation detail."
     }
-  ]
+  ],
+  "final_state": {
+    "measured": "2026-09-10, from a clean-room build",
+    "pages": 49,
+    "title_max_chars": 56,
+    "description_range_chars": [
+      70,
+      148
+    ],
+    "pages_with_structured_data": 48,
+    "sitemap_urls_with_git_lastmod": "48 of 48",
+    "guards_in_check_build": [
+      "internal links resolve, relative ones included",
+      "robots.txt exists and advertises a sitemap that is in dist/",
+      "og:image absolute, present on every page, dimensions match the real PNG",
+      "og:type matches what the page is",
+      "every <title> unique, present and under 60 chars, never repeating itself across the delimiter",
+      "every description present, 70-160 chars, unique",
+      "JSON-LD parses, has the right @context and a @type per node, and carries no fabricated ratings",
+      "breadcrumbs are complete, sequential and end at the page they are on",
+      "sitemap lastmod present, parseable, not in the future, and equal to the page dateModified",
+      "llms.txt and the sitemap list the same pages",
+      "the findings catalog links every finding page",
+      "no page links to itself",
+      "exactly one meaningful h1, no skipped heading levels, no empty headings, no duplicate anchors, no generic link text",
+      "noindex on the 404 and on nothing else",
+      "no third-party stylesheets, scripts or images; no image without dimensions",
+      "client-JS budget 32 KiB, render-blocking CSS budget 96 KiB"
+    ],
+    "open_stories_needing_the_owner": [
+      "SEO-17"
+    ]
+  }
 }

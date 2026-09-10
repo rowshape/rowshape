@@ -2,6 +2,7 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import sitemap from '@astrojs/sitemap';
+import { unified } from '@astrojs/markdown-remark';
 import { SITE, REPO } from './src/site.ts';
 import { lastmodFor } from './src/lastmod.ts';
 import remarkLinkFindingCodes from './src/plugins/remark-link-finding-codes.mjs';
@@ -16,9 +17,15 @@ import remarkLinkFindingCodes from './src/plugins/remark-link-finding-codes.mjs'
 export default defineConfig({
 	site: SITE,
 	markdown: {
-		// Every mention of a finding code becomes a link to that finding's page.
-		// See the plugin for why this is generated rather than written by hand.
-		remarkPlugins: [remarkLinkFindingCodes],
+		// `markdown.remarkPlugins` is deprecated in Astro 7 — the supported path is
+		// an explicit processor. Starlight reads `markdown.processor` and pushes its
+		// own plugins onto it, so passing ours here composes with Starlight's rather
+		// than replacing them.
+		//
+		// The plugin turns every mention of a finding code into a link to that
+		// finding's page; see the plugin for why that is generated rather than
+		// written by hand.
+		processor: unified({ remarkPlugins: [remarkLinkFindingCodes] }),
 	},
 	integrations: [
 		// Declared explicitly so it can be configured. Starlight adds
