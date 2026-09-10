@@ -640,6 +640,37 @@ async function checkLlmsTxt() {
 	return problems;
 }
 
+/**
+ * Exactly one h1 per page, and it says something.
+ *
+ * The homepage's h1 was the bare word "rowshape" — the one thing a reader who
+ * arrived already knows, and the one thing a reader who has not heard of it
+ * cannot use. An h1 that is only the site name is the heading equivalent of the
+ * "rowshape | rowshape" title iteration 3 removed, and the brand is already in
+ * the site header. Zero or several h1s is the other failure: it leaves the page
+ * with no single statement of what it is about.
+ */
+async function checkHeadings(pages) {
+	const problems = [];
+	for (const page of pages) {
+		const rel = page.replace(/\\/g, '/');
+		const html = await readFile(page, 'utf8');
+		const h1s = [...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/g)].map((m) =>
+			m[1].replace(/<[^>]+>/g, '').trim()
+		);
+		if (h1s.length !== 1) {
+			problems.push(`${rel}: ${h1s.length} h1 elements, expected exactly 1`);
+			continue;
+		}
+		if (h1s[0].toLowerCase() === 'rowshape') {
+			problems.push(
+				`${rel}: h1 is just the site name — say what the page is about; the brand is in the header`
+			);
+		}
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -666,9 +697,15 @@ async function main() {
 	const sitemap = await checkSitemap(pages);
 	const catalog = await checkCatalogCoverage(pages);
 	const llms = await checkLlmsTxt();
+	const headings = await checkHeadings(pages);
 	const selfLinks = await checkSelfLinks(pages);
 
 	let failed = false;
+	if (headings.length) {
+		failed = true;
+		console.error(`${headings.length} heading problem(s):`);
+		for (const h of headings) console.error(`  ${h}`);
+	}
 	if (llms.length) {
 		failed = true;
 		console.error(`${llms.length} llms.txt problem(s):`);
@@ -734,7 +771,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, one meaningful h1 per page, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
 }
 
 await main();

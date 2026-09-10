@@ -39,7 +39,7 @@ export default defineConfig({
 		starlight({
 			title: 'rowshape',
 			description:
-				'The type-checker for database migrations — a human and an agent get the same answer through the same contract.',
+				"The type-checker for PostgreSQL migrations: check a proposed schema change against your production data's shape and get a machine-readable verdict.",
 			// Decouples the <title> tag from the page heading and de-duplicates the
 			// homepage title. See the file for why both are needed.
 			routeMiddleware: './src/starlightRouteData.ts',
@@ -67,7 +67,7 @@ export default defineConfig({
 					attrs: {
 						property: 'og:image:alt',
 						content:
-							'rowshape — the type-checker for database migrations. A terminal showing `rowshape validate` returning FAIL RS-LOCK-001: ACCESS EXCLUSIVE on users, ~4m.',
+							'rowshape — the type-checker for PostgreSQL migrations. A terminal showing `rowshape validate` returning FAIL RS-LOCK-001: ACCESS EXCLUSIVE on users, ~4m.',
 					},
 				},
 				{ tag: 'meta', attrs: { name: 'twitter:image', content: `${SITE}/og.png` } },

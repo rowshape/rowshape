@@ -47,7 +47,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" 
   <!-- The one sentence. Two lines, because at 1200px wide a single 44px line of
        this length wraps in the preview card and gets cropped mid-word. -->
   <text x="80" y="268" font-family="${SANS}" font-size="52" fill="${WHITE}">The type-checker for</text>
-  <text x="80" y="334" font-family="${SANS}" font-size="52" fill="${WHITE}">database migrations.</text>
+  <text x="80" y="334" font-family="${SANS}" font-size="52" fill="${WHITE}">PostgreSQL migrations.</text>
 
   <text x="80" y="392" font-family="${SANS}" font-size="27" fill="${MUTED}">A human and an agent get the same answer through the same contract.</text>
 

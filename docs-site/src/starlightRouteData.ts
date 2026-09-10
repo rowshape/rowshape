@@ -212,7 +212,7 @@ export const onRequest = defineRouteMiddleware((context) => {
 	const title = data.seoTitle
 		? data.seoTitle
 		: isSiteRoot
-			? `${siteTitle} — the type-checker for database migrations`
+			? `${siteTitle} — the type-checker for Postgres migrations`
 			: `${data.title} | ${siteTitle}`;
 
 	for (const tag of head) {
@@ -224,7 +224,7 @@ export const onRequest = defineRouteMiddleware((context) => {
 	// excluded from the sitemap for the same reason.
 	const is404 = context.url.pathname.replace(/\/$/, '') === '/404';
 	if (isSiteRoot) {
-		const description = data.description ?? 'The type-checker for database migrations.';
+		const description = data.description ?? 'The type-checker for PostgreSQL migrations.';
 		head.push({
 			tag: 'script',
 			attrs: { type: 'application/ld+json' },

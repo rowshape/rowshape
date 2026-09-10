@@ -128,7 +128,16 @@
     {
       "id": "SEO-9",
       "title": "Homepage H1 and above-the-fold copy carry the query language, not only the metaphor",
-      "status": "open"
+      "status": "done",
+      "iteration": 10,
+      "verified": [
+        "the homepage did not contain the word PostgreSQL anywhere — an accuracy gap for a visitor as much as a keyword one, since rowshape is Postgres today with MySQL on the roadmap",
+        "h1 was the bare word \"rowshape\"; it is now \"The type-checker for PostgreSQL migrations\". The brand is in the site header two lines above.",
+        "hero tagline, the problem section, the meta description, the site-wide description, the og:image alt and the social card itself all now name PostgreSQL, and the roadmap position of MySQL is stated rather than left ambiguous",
+        "title tag: \"rowshape — the type-checker for Postgres migrations\" (51 chars)",
+        "the card was regenerated and re-rendered to confirm the longer line still fits",
+        "check-build.mjs now fails on any page with zero or several h1s, or an h1 that is only the site name — negative-tested"
+      ]
     },
     {
       "id": "SEO-10",
