@@ -253,6 +253,16 @@ async function checkSocialCard(pages) {
 		if (!html.includes('<meta name="twitter:image"')) {
 			problems.push(`${rel}: og:image without twitter:image`);
 		}
+		// Starlight hardcodes og:type="article". True for the 47 docs pages, false
+		// for the splash homepage and the 404, which are not documents.
+		const ogType = html.match(/<meta property="og:type" content="([^"]*)"/)?.[1];
+		const shouldBeWebsite = rel === 'dist/index.html' || rel === 'dist/404.html';
+		if (shouldBeWebsite && ogType !== 'website') {
+			problems.push(`${rel}: og:type is "${ogType}" — this page is a website, not an article`);
+		}
+		if (!shouldBeWebsite && ogType !== 'article') {
+			problems.push(`${rel}: og:type is "${ogType}" — a documentation page is an article`);
+		}
 		const w = html.match(/<meta property="og:image:width" content="(\d+)"/);
 		const h = html.match(/<meta property="og:image:height" content="(\d+)"/);
 		if (w && h) {
@@ -663,6 +673,20 @@ async function checkLlmsTxt() {
  * the site header. Zero or several h1s is the other failure: it leaves the page
  * with no single statement of what it is about.
  */
+const GENERIC_LINK_TEXT = new Set([
+	'here',
+	'click here',
+	'read more',
+	'more',
+	'link',
+	'this',
+	'this link',
+	'learn more',
+	'see here',
+	'read this',
+	'see',
+]);
+
 async function checkHeadings(pages) {
 	const problems = [];
 	for (const page of pages) {
@@ -679,6 +703,52 @@ async function checkHeadings(pages) {
 			problems.push(
 				`${rel}: h1 is just the site name — say what the page is about; the brand is in the header`
 			);
+		}
+
+		// Everything below is about the page's own content, so read <main> only:
+		// the sidebar and header have their own headings and are nav, not prose.
+		const main = html.match(/<main[\s\S]*?<\/main>/)?.[0] ?? '';
+		const headings = [...main.matchAll(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/g)].map((m) => ({
+			level: Number(m[1]),
+			text: m[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(),
+		}));
+
+		// A skipped level (h2 straight to h4) breaks the document outline a screen
+		// reader navigates by, and breaks the section boundaries a search engine
+		// uses to pull a passage out of a long page. Audited across all 49 pages
+		// before this was written: there were none, which is what makes it cheap
+		// to require.
+		let previous = 0;
+		for (const heading of headings) {
+			if (previous && heading.level > previous + 1) {
+				problems.push(
+					`${rel}: heading level jumps h${previous} -> h${heading.level} at "${heading.text.slice(0, 40)}"`
+				);
+			}
+			if (!heading.text) problems.push(`${rel}: an h${heading.level} is empty`);
+			previous = heading.level;
+		}
+
+		// Two headings with the same slug means one of the two #anchors silently
+		// points at the other — including the anchors in the table of contents.
+		const ids = new Set();
+		for (const m of main.matchAll(/<h[2-6][^>]*\bid="([^"]+)"/g)) {
+			if (ids.has(m[1])) problems.push(`${rel}: duplicate heading anchor #${m[1]}`);
+			ids.add(m[1]);
+		}
+
+		// "Click here" tells a reader scanning links, and a crawler weighing them,
+		// nothing about the destination.
+		for (const m of main.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/g)) {
+			const text = m[1]
+				.replace(/<[^>]+>/g, '')
+				.replace(/\s+/g, ' ')
+				.trim()
+				.toLowerCase()
+				.replace(/[.,:;!?]$/, '');
+			if (GENERIC_LINK_TEXT.has(text)) {
+				problems.push(`${rel}: link text "${text}" says nothing about where it goes`);
+			}
 		}
 	}
 	return problems;
@@ -895,7 +965,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, one meaningful h1 per page, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
 }
 
 await main();

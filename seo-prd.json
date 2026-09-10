@@ -200,7 +200,14 @@
     {
       "id": "SEO-14",
       "title": "Heading hierarchy and semantic structure audit across all 49 pages",
-      "status": "open"
+      "status": "done",
+      "iteration": 13,
+      "verified": [
+        "audited all 49 pages for skipped heading levels, empty headings, duplicate heading anchors and generic link text: ZERO of each. The docs are well written and nothing needed rewriting.",
+        "found one real defect in the same area instead: Starlight hardcodes og:type=\"article\" on every route, including the splash homepage and the 404, neither of which is a document. Both now emit \"website\".",
+        "check-build.mjs now enforces all five: no skipped levels, no empty heading, no duplicate anchor, no \"click here\"-class link text, and og:type matching what the page actually is",
+        "all five negative-tested by injecting each failure into dist/ and watching it fire"
+      ]
     },
     {
       "id": "SEO-15",

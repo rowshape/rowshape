@@ -204,6 +204,9 @@ export const onRequest = defineRouteMiddleware((context) => {
 	// title that ranks for the brand query, and "rowshape" alone tells a searcher
 	// who has not heard of it nothing at all.
 	const isSiteRoot = data.title.trim().toLowerCase() === siteTitle.trim().toLowerCase();
+	// The two routes that are not documents: the splash homepage and the 404.
+	// They get no article schema and no og:type="article".
+	const is404 = context.url.pathname.replace(/\/$/, '') === '/404';
 
 	// When `seoTitle` is set it IS the whole title tag, suffix included or not.
 	// That matters on the findings pages: the suffix costs ten characters of a
@@ -217,12 +220,17 @@ export const onRequest = defineRouteMiddleware((context) => {
 
 	for (const tag of head) {
 		if (tag.tag === 'title') tag.content = title;
+
+		// Starlight emits og:type="article" on every route, which is right for the
+		// 47 documentation pages and wrong for the two that are not documents. A
+		// splash homepage is a website, not an article; so is a 404. It is a small
+		// claim, but it is the claim a share card and a link preview read to decide
+		// what they are looking at.
+		if (tag.tag === 'meta' && tag.attrs?.property === 'og:type' && (isSiteRoot || is404)) {
+			tag.attrs.content = 'website';
+		}
 	}
 
-	// The homepage describes the software; every other page describes where it
-	// sits and what it is. The 404 gets neither: it is not a document, and it is
-	// excluded from the sitemap for the same reason.
-	const is404 = context.url.pathname.replace(/\/$/, '') === '/404';
 	if (isSiteRoot) {
 		const description = data.description ?? 'The type-checker for PostgreSQL migrations.';
 		head.push({
@@ -231,6 +239,7 @@ export const onRequest = defineRouteMiddleware((context) => {
 			content: serializeJsonLd(homepageJsonLd(description)),
 		});
 	} else if (!is404) {
+		// Every other page describes where it sits and what it is.
 		head.push({
 			tag: 'script',
 			attrs: { type: 'application/ld+json' },
