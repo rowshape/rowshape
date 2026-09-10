@@ -1,0 +1,114 @@
+{
+  "$schema": "rowshape/seo-loop-prd/v1",
+  "version": "0.1.0",
+  "title": "rowshape.com SEO backlog",
+  "surface": "docs-site/ (Astro 7 + Starlight 0.41, deployed to Cloudflare Pages at https://rowshape.com)",
+  "how_this_works": "One iteration fixes one SEO element end to end: change, build, `npm run check`, commit. Work that cannot finish in one iteration stays here as an open story and is picked up next iteration. Every story records what was VERIFIED, not what was intended.",
+  "audit_baseline": {
+    "date": "2026-09-10",
+    "method": "built docs-site locally (49 pages) and read the emitted dist/",
+    "already_good": [
+      "sitemap-index.xml + sitemap-0.xml emitted by Astro 7 automatically; 49 URLs, all absolute against site: https://rowshape.com",
+      "rel=canonical on every page (Starlight)",
+      "meta description present in frontmatter on all 48 content pages - zero missing",
+      "og:title, og:type, og:url, og:locale, og:description, og:site_name emitted",
+      "internal link checker + 32KB client-JS budget already enforced in scripts/check-build.mjs",
+      "no framework runtime shipped; fast by construction"
+    ],
+    "gaps_found": [
+      "NO robots.txt at all - crawlers get a 404 and the sitemap is undiscoverable except via the <link rel=sitemap> hint",
+      "NO og:image / twitter:image on any page, while twitter:card is declared summary_large_image - every share renders as a blank card",
+      "homepage <title> is 'rowshape | rowshape' - the site title is appended to a page title that already is the site title",
+      "no JSON-LD anywhere: no SoftwareApplication, no BreadcrumbList, no TechArticle",
+      "/pagefind/ search-index fragments are crawlable JSON with no canonical",
+      "27 findings pages carry generic RS-CODE titles rather than the problem language a developer would search",
+      "no llms.txt / AI-crawler surface, on a product whose whole wedge is the agent loop",
+      "check-build.mjs guards links and JS weight but asserts nothing about head metadata"
+    ]
+  },
+  "stories": [
+    {
+      "id": "SEO-1",
+      "title": "robots.txt, generated from astro.config's site so it cannot drift",
+      "status": "done",
+      "iteration": 1,
+      "verified": [
+        "dist/robots.txt is emitted by the build and names https://rowshape.com/sitemap-index.xml, which exists in dist/",
+        "/pagefind/ is disallowed; /_astro/ deliberately is not",
+        "scripts/check-build.mjs now fails the build if robots.txt is missing, names no sitemap, names one that is not in dist/, or starts blocking render assets — negative-tested by hand-editing dist/robots.txt and watching both assertions fire"
+      ]
+    },
+    {
+      "id": "SEO-2",
+      "title": "og:image + twitter:image - a real social card, and the head tags that point at it",
+      "status": "open"
+    },
+    {
+      "id": "SEO-3",
+      "title": "Title template: kill 'rowshape | rowshape', keep titles under 60 chars",
+      "status": "open"
+    },
+    {
+      "id": "SEO-4",
+      "title": "check-build.mjs SEO guard: canonical, description length, title length, og:image, one h1",
+      "status": "open",
+      "note": "Land early - it guards every later story."
+    },
+    {
+      "id": "SEO-5",
+      "title": "JSON-LD SoftwareApplication on the homepage",
+      "status": "open"
+    },
+    {
+      "id": "SEO-6",
+      "title": "JSON-LD BreadcrumbList + TechArticle on docs pages",
+      "status": "open"
+    },
+    {
+      "id": "SEO-7",
+      "title": "Findings pages: search-intent titles and descriptions across all 27 codes",
+      "status": "open",
+      "note": "Highest long-tail value. Likely spans more than one iteration - split by namespace if so."
+    },
+    {
+      "id": "SEO-8",
+      "title": "Internal linking: related findings, and findings <-> CLI reference cross-links",
+      "status": "open"
+    },
+    {
+      "id": "SEO-9",
+      "title": "Homepage H1 and above-the-fold copy carry the query language, not only the metaphor",
+      "status": "open"
+    },
+    {
+      "id": "SEO-10",
+      "title": "llms.txt + AI-crawler surface",
+      "status": "open"
+    },
+    {
+      "id": "SEO-11",
+      "title": "Sitemap serialize: lastmod from git, and drop non-content routes",
+      "status": "open"
+    },
+    {
+      "id": "SEO-12",
+      "title": "404 page: useful, indexable-as-noindex, and links back into the tree",
+      "status": "open"
+    },
+    {
+      "id": "SEO-13",
+      "title": "Core Web Vitals: font loading, CLS on the hero, preconnect audit",
+      "status": "open"
+    },
+    {
+      "id": "SEO-14",
+      "title": "Heading hierarchy and semantic structure audit across all 49 pages",
+      "status": "open"
+    },
+    {
+      "id": "SEO-15",
+      "title": "Rollup: re-run the full audit against the built site and close or re-open every story",
+      "status": "open"
+    }
+  ]
+}
