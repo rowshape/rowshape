@@ -1,6 +1,7 @@
 import { defineRouteMiddleware } from '@astrojs/starlight/route-data';
 
 import { SITE, REPO } from './site';
+import { lastmodFor } from './lastmod';
 
 /**
  * Structured data for the homepage.
@@ -112,10 +113,13 @@ const SECTIONS: Record<string, string> = {
  * this content — not Article, which is for editorial, and not FAQPage, which
  * these pages are not.
  *
- * There is no datePublished or dateModified yet. Both are real signals and both
- * need the git commit date of the source file, which this middleware has no way
- * to reach; the sitemap story that computes that map (seo-prd.json SEO-11) is
- * where they get added. An absent date is valid; a made-up one is not.
+ * dateModified is the git commit date of the page's source, from the map
+ * scripts/gen-lastmod.mjs writes before each build — the same map the sitemap's
+ * <lastmod> uses, so a page cannot advertise two different freshness dates.
+ * There is deliberately no datePublished: it would be the file's FIRST commit,
+ * which for pages moved between repos or split out of another file is a date
+ * about the file rather than about the content. An absent date is valid; a
+ * made-up one is not.
  */
 function docPageJsonLd(
 	pathname: string,
@@ -123,6 +127,9 @@ function docPageJsonLd(
 	description: string | undefined,
 	siteTitle: string
 ) {
+	// The git commit date of the page's source. Absent for a page not yet
+	// committed, in which case the article claims no date at all.
+	const dateModified = lastmodFor(pathname);
 	const segments = pathname.split('/').filter(Boolean);
 	const url = new URL(pathname, SITE).href;
 
@@ -164,6 +171,7 @@ function docPageJsonLd(
 			// the headline here, and the findings titles run to 96.
 			headline: title.slice(0, 110),
 			...(description ? { description } : {}),
+			...(dateModified ? { dateModified } : {}),
 			url,
 			inLanguage: 'en',
 			isPartOf: { '@id': `${SITE}/#website` },

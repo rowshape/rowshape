@@ -471,6 +471,67 @@ async function checkStructuredData(pages) {
 	return problems;
 }
 
+/**
+ * The sitemap, and the freshness dates in it.
+ *
+ * A <lastmod> is only a useful hint if it is true. The two ways to make it
+ * false are both silent: a shallow clone gives every page the same date (which
+ * gen-lastmod.mjs refuses outright), and a date drawn from file mtime rather
+ * than git makes every page look modified at checkout time. So this asserts the
+ * dates are real ISO timestamps, are not in the future, and — the part that
+ * matters — AGREE with the dateModified the page itself publishes. Two
+ * freshness claims that disagree are worse than one.
+ */
+async function checkSitemap(pages) {
+	const problems = [];
+	const path = join(DIST, 'sitemap-0.xml');
+	if (!existsSync(path)) return ['no sitemap-0.xml in dist/'];
+
+	const xml = await readFile(path, 'utf8');
+	const entries = [...xml.matchAll(/<url><loc>([^<]+)<\/loc>(?:<lastmod>([^<]+)<\/lastmod>)?/g)];
+	if (entries.length === 0) return ['sitemap-0.xml contains no <url> entries'];
+
+	// What the pages themselves claim, so the two sources can be compared.
+	const claimed = new Map();
+	for (const page of pages) {
+		const rel = page.replace(/\\/g, '/');
+		const route = '/' + rel.replace(/^dist\//, '').replace(/index\.html$/, '');
+		const m = (await readFile(page, 'utf8')).match(/"dateModified":"([^"]+)"/);
+		if (m) claimed.set(route, m[1]);
+	}
+
+	const now = Date.now();
+	for (const [, loc, lastmod] of entries) {
+		const route = new URL(loc).pathname;
+		if (!lastmod) {
+			problems.push(`sitemap: ${route} has no <lastmod>`);
+			continue;
+		}
+		const t = Date.parse(lastmod);
+		if (Number.isNaN(t)) {
+			problems.push(`sitemap: ${route} has an unparseable <lastmod> "${lastmod}"`);
+			continue;
+		}
+		if (t > now + 60_000) {
+			problems.push(`sitemap: ${route} claims a <lastmod> in the future — ${lastmod}`);
+		}
+		const page = claimed.get(route);
+		// Compared as instants: the sitemap normalizes to UTC, the page keeps the
+		// commit's own offset, and those are the same moment written two ways.
+		if (page && Date.parse(page) !== t) {
+			problems.push(
+				`sitemap: ${route} <lastmod> ${lastmod} disagrees with the page's dateModified ${page}`
+			);
+		}
+	}
+
+	// The 404 is not a document and must not be advertised as one.
+	if (entries.some(([, loc]) => new URL(loc).pathname === '/404/')) {
+		problems.push('sitemap: /404/ is listed');
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -494,8 +555,15 @@ async function main() {
 	const titles = await checkTitles(pages);
 	const descriptions = await checkDescriptions(pages);
 	const jsonld = await checkStructuredData(pages);
+	const sitemap = await checkSitemap(pages);
 
 	let failed = false;
+	if (sitemap.length) {
+		failed = true;
+		console.error(`${sitemap.length} sitemap problem(s):`);
+		for (const p of sitemap.slice(0, 10)) console.error(`  ${p}`);
+		if (sitemap.length > 10) console.error(`  … and ${sitemap.length - 10} more`);
+	}
 	if (jsonld.length) {
 		failed = true;
 		console.error(`${jsonld.length} structured-data problem(s):`);
@@ -544,7 +612,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
 }
 
 await main();

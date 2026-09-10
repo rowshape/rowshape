@@ -1,7 +1,9 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import sitemap from '@astrojs/sitemap';
 import { SITE, REPO } from './src/site.ts';
+import { lastmodFor } from './src/lastmod.ts';
 
 // The one place the stack is deliberately not Go (PRD §9). The Go decision was
 // about the binary — single static artifact, no runtime, hydrate is CPU-bound —
@@ -13,6 +15,21 @@ import { SITE, REPO } from './src/site.ts';
 export default defineConfig({
 	site: SITE,
 	integrations: [
+		// Declared explicitly so it can be configured. Starlight adds
+		// `@astrojs/sitemap` on its own ONLY when the integration is not already
+		// present, so listing it here replaces its default rather than duplicating
+		// it — the sitemap was previously a bare list of 49 <loc> elements with no
+		// <lastmod>, which tells a crawler nothing about what is worth re-fetching.
+		sitemap({
+			serialize(item) {
+				// The date is the git commit date of the page's source, from
+				// src/generated/lastmod.json. A route with no entry (added but not yet
+				// committed) simply gets no <lastmod>: an absent date costs a hint, a
+				// wrong one spends trust.
+				const lastmod = lastmodFor(new URL(item.url).pathname);
+				return lastmod ? { ...item, lastmod } : item;
+			},
+		}),
 		starlight({
 			title: 'rowshape',
 			description:

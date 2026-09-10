@@ -128,9 +128,20 @@
     },
     {
       "id": "SEO-11",
-      "title": "Sitemap serialize: lastmod from git, and drop non-content routes",
-      "status": "open",
-      "note": "Also supplies dateModified for the TechArticle nodes added in iteration 6 — same git-date map, two consumers."
+      "title": "Sitemap <lastmod> and article dateModified, both from git",
+      "status": "done",
+      "note": "Also supplies dateModified for the TechArticle nodes added in iteration 6 — same git-date map, two consumers.",
+      "iteration": 7,
+      "verified": [
+        "the sitemap was 49 bare <loc> elements; every URL now carries a <lastmod> that is the git commit date of that page source",
+        "the same map feeds dateModified on every TechArticle, so a page cannot advertise two different freshness dates — check-build.mjs compares them as instants and fails if they disagree",
+        "gen-lastmod.mjs REFUSES a shallow clone rather than degrading, and that guard fired for real: this session's own checkout was shallow, which would have given all 49 pages one identical date",
+        "docs-deploy.yml now checks out with fetch-depth: 0 in both jobs — actions/checkout defaults to 1, so CI was exactly the case the guard describes",
+        "no datePublished: it would be the file's first commit, a date about the file rather than the content",
+        "a page not yet committed simply gets no date, in the sitemap and in the article",
+        "@astrojs/sitemap declared as a direct dependency (Starlight adds its own only when absent, so this replaces rather than duplicates); package-lock.json edited surgically, one line, and npm ci verified from a clean node_modules",
+        "guard negative-tested on a future date and on a missing lastmod"
+      ]
     },
     {
       "id": "SEO-12",
