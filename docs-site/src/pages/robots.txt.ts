@@ -40,6 +40,7 @@ export const GET: APIRoute = ({ site }) => {
 	}
 
 	const sitemap = new URL('sitemap-index.xml', site).href;
+	const llms = new URL('llms.txt', site).href;
 
 	const body = `# https://rowshape.com — the type-checker for database migrations.
 # Source: https://github.com/rowshape/rowshape/blob/main/docs-site/src/pages/robots.txt.ts
@@ -49,6 +50,11 @@ Allow: /
 Disallow: /pagefind/
 
 Sitemap: ${sitemap}
+
+# A Markdown index of this site for language models (llmstxt.org). There is no
+# standard directive for it; this is a comment so that anything already fetching
+# robots.txt can find it.
+# llms.txt: ${llms}
 `;
 
 	return new Response(body, {

@@ -603,6 +603,43 @@ async function checkSelfLinks(pages) {
 	return problems;
 }
 
+/**
+ * llms.txt lists every page the sitemap does.
+ *
+ * It is generated from the content collection, so it cannot go stale on its
+ * own — but SECTIONS in the endpoint is hand-ordered, and a section added to
+ * the site and not to that list would quietly fall into the catch-all or, if
+ * the catch-all were ever removed, out of the file entirely. This asserts the
+ * two indexes agree.
+ */
+async function checkLlmsTxt() {
+	const path = join(DIST, 'llms.txt');
+	if (!existsSync(path)) return ['no llms.txt in dist/'];
+
+	const text = await readFile(path, 'utf8');
+	const listed = new Set([...text.matchAll(/\]\((https?:\/\/[^)]+)\)/g)].map((m) => m[1]));
+
+	const problems = [];
+	const sitemapPath = join(DIST, 'sitemap-0.xml');
+	if (!existsSync(sitemapPath)) return ['no sitemap to compare llms.txt against'];
+	const xml = await readFile(sitemapPath, 'utf8');
+
+	for (const m of xml.matchAll(/<loc>([^<]+)<\/loc>/g)) {
+		const url = m[1];
+		// The homepage is the file's own subject, described in the header rather
+		// than listed as a bullet.
+		if (new URL(url).pathname === '/') continue;
+		if (!listed.has(url)) problems.push(`llms.txt does not list ${url}`);
+	}
+	for (const url of listed) {
+		if (new URL(url).hostname !== 'rowshape.com') continue;
+		if (!xml.includes(`<loc>${url}</loc>`)) {
+			problems.push(`llms.txt lists ${url}, which is not in the sitemap`);
+		}
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -628,9 +665,15 @@ async function main() {
 	const jsonld = await checkStructuredData(pages);
 	const sitemap = await checkSitemap(pages);
 	const catalog = await checkCatalogCoverage(pages);
+	const llms = await checkLlmsTxt();
 	const selfLinks = await checkSelfLinks(pages);
 
 	let failed = false;
+	if (llms.length) {
+		failed = true;
+		console.error(`${llms.length} llms.txt problem(s):`);
+		for (const l of llms) console.error(`  ${l}`);
+	}
 	const linking = [...catalog, ...selfLinks];
 	if (linking.length) {
 		failed = true;
@@ -691,7 +734,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
 }
 
 await main();

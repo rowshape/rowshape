@@ -133,7 +133,15 @@
     {
       "id": "SEO-10",
       "title": "llms.txt + AI-crawler surface",
-      "status": "open"
+      "status": "done",
+      "iteration": 9,
+      "verified": [
+        "/llms.txt generated from the content collection (not hand-written), listing all 47 content pages with their descriptions under ordered sections",
+        "a page not claimed by a section falls into a catch-all rather than being dropped silently",
+        "robots.txt points at it in a comment — there is no standard directive, and a comment costs nothing",
+        "check-build.mjs fails if llms.txt and the sitemap disagree in either direction — negative-tested on both",
+        "this is not claimed as a ranking signal. It matters because rowshape's wedge is being the tool inside an agent's turn, and an agent inferring the CLI surface from rendered HTML full of nav chrome is the failure it removes."
+      ]
     },
     {
       "id": "SEO-11",
