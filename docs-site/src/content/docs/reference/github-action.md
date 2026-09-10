@@ -9,7 +9,7 @@ sidebar:
 
 Run `rowshape validate` in CI and gate a pull request on the verdict. The Action
 is a **thin wrapper over the released `rowshape` binary** — it adds no finding
-logic and renders the exact same [Verdict](../internal/verdict/verdict.go) the
+logic and renders the exact same [Verdict](https://github.com/rowshape/rowshape/blob/main/internal/verdict/verdict.go) the
 CLI and MCP server produce (one struct, two marshalers; PRD §10,
 INV-VERDICT-SHAPE). It needs **no production credential**: point it at a
 disposable Postgres and `validate` hydrates a throwaway database from a committed

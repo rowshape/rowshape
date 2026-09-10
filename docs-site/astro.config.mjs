@@ -4,6 +4,7 @@ import starlight from '@astrojs/starlight';
 import sitemap from '@astrojs/sitemap';
 import { SITE, REPO } from './src/site.ts';
 import { lastmodFor } from './src/lastmod.ts';
+import remarkLinkFindingCodes from './src/plugins/remark-link-finding-codes.mjs';
 
 // The one place the stack is deliberately not Go (PRD §9). The Go decision was
 // about the binary — single static artifact, no runtime, hydrate is CPU-bound —
@@ -14,6 +15,11 @@ import { lastmodFor } from './src/lastmod.ts';
 // https://astro.build/config
 export default defineConfig({
 	site: SITE,
+	markdown: {
+		// Every mention of a finding code becomes a link to that finding's page.
+		// See the plugin for why this is generated rather than written by hand.
+		remarkPlugins: [remarkLinkFindingCodes],
+	},
 	integrations: [
 		// Declared explicitly so it can be configured. Starlight adds
 		// `@astrojs/sitemap` on its own ONLY when the integration is not already

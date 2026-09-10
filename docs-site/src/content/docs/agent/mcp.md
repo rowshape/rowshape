@@ -54,7 +54,7 @@ nothing.
 
 ## How the agent uses them
 
-The four compose into the loop the [agent rule](./rule/) tells the agent to run:
+The four compose into the loop the [agent rule](../rule/) tells the agent to run:
 
 ```text
 describe_shape        →  read the shape before writing SQL

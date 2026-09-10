@@ -43,11 +43,28 @@ function extractLinks(html) {
 	return [...html.matchAll(/(?:href|src)="([^"]+)"/g)].map((m) => m[1]);
 }
 
-/** Resolve an internal link to the file that must exist in dist/. */
-function resolveTarget(link) {
+/**
+ * Resolve an internal link to the file that must exist in dist/.
+ *
+ * `from` is the page the link was written on, so a RELATIVE link resolves the
+ * way a browser resolves it. That case used to be skipped as "rare in Starlight
+ * output", which was wrong: the finding catalog links all 27 of its pages as
+ * `./rs-lock-001/`, so the site's densest and most important set of internal
+ * links was the one set nothing verified. Renaming a slug would have 404'd
+ * silently.
+ */
+function resolveTarget(link, from) {
 	const clean = link.split('#')[0].split('?')[0];
-	if (!clean || clean === '/') return join(DIST, 'index.html');
-	const path = join(DIST, clean);
+	if (!clean) return null;
+	let path;
+	if (clean.startsWith('/')) {
+		if (clean === '/') return join(DIST, 'index.html');
+		path = join(DIST, clean);
+	} else {
+		// Relative to the DIRECTORY the page is in — dist/findings/index.html has
+		// directory dist/findings, so ./rs-lock-001/ is dist/findings/rs-lock-001.
+		path = resolve(dirname(from), clean);
+	}
 	if (extname(clean)) return path; // an asset: /_astro/x.js, /favicon.svg
 	return join(path, 'index.html'); // a page: /install/ -> dist/install/index.html
 }
@@ -60,8 +77,8 @@ async function checkLinks(pages) {
 			// External, protocol-relative, anchors, and data URIs are not ours to
 			// verify. A link checker that hits the network is a flaky CI job.
 			if (/^(https?:|\/\/|#|mailto:|data:)/.test(link)) continue;
-			if (!link.startsWith('/')) continue; // relative links are rare in Starlight output
-			const target = resolveTarget(link);
+			const target = resolveTarget(link, page);
+			if (!target) continue;
 			if (!existsSync(target)) broken.push(`${page} -> ${link} (expected ${target})`);
 		}
 	}
@@ -532,6 +549,60 @@ async function checkSitemap(pages) {
 	return problems;
 }
 
+/**
+ * The finding catalog must link every finding page.
+ *
+ * /findings/ is the hub: it is what the sidebar, the homepage and every
+ * external mention point at, and a page it does not list is reachable only from
+ * the sidebar — which is nav, not content. The list is maintained by hand, so
+ * the failure is adding a finding page and forgetting the index. That is
+ * exactly the kind of omission nobody notices, because the new page still
+ * builds, still renders, and still appears in the sidebar.
+ */
+async function checkCatalogCoverage(pages) {
+	const index = join(DIST, 'findings', 'index.html');
+	if (!existsSync(index)) return ['no findings catalog at dist/findings/index.html'];
+
+	const html = await readFile(index, 'utf8');
+	const main = html.match(/<main[\s\S]*?<\/main>/)?.[0] ?? '';
+	const linked = new Set();
+	for (const m of main.matchAll(/href="([^"#?]+)"/g)) {
+		const slug = m[1].replace(/\/$/, '').split('/').pop();
+		if (slug) linked.add(slug);
+	}
+
+	const problems = [];
+	for (const page of pages) {
+		const rel = page.replace(/\\/g, '/');
+		const m = rel.match(/^dist\/findings\/(rs-[a-z]+-\d+)\/index\.html$/);
+		if (m && !linked.has(m[1])) {
+			problems.push(`findings catalog does not link ${m[1]} — add it to findings/index.md`);
+		}
+	}
+	return problems;
+}
+
+/**
+ * No page links to itself from its own content.
+ *
+ * A self-link is dead weight to a reader and is read as nothing by a crawler.
+ * The finding-code autolinker skips them by construction; this catches the
+ * hand-written kind.
+ */
+async function checkSelfLinks(pages) {
+	const problems = [];
+	for (const page of pages) {
+		const rel = page.replace(/\\/g, '/');
+		const route = '/' + rel.replace(/^dist\//, '').replace(/index\.html$/, '');
+		const main = (await readFile(page, 'utf8')).match(/<main[\s\S]*?<\/main>/)?.[0] ?? '';
+		for (const m of main.matchAll(/href="(\/[^"#?]*)"/g)) {
+			const target = m[1].endsWith('/') ? m[1] : `${m[1]}/`;
+			if (target === route) problems.push(`${rel}: links to itself`);
+		}
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -556,8 +627,16 @@ async function main() {
 	const descriptions = await checkDescriptions(pages);
 	const jsonld = await checkStructuredData(pages);
 	const sitemap = await checkSitemap(pages);
+	const catalog = await checkCatalogCoverage(pages);
+	const selfLinks = await checkSelfLinks(pages);
 
 	let failed = false;
+	const linking = [...catalog, ...selfLinks];
+	if (linking.length) {
+		failed = true;
+		console.error(`${linking.length} internal-linking problem(s):`);
+		for (const l of linking) console.error(`  ${l}`);
+	}
 	if (sitemap.length) {
 		failed = true;
 		console.error(`${sitemap.length} sitemap problem(s):`);
@@ -612,7 +691,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, all within the ${JS_BUDGET_BYTES / 1024} KiB JS budget`);
 }
 
 await main();

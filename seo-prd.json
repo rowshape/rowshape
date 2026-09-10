@@ -114,7 +114,16 @@
     {
       "id": "SEO-8",
       "title": "Internal linking: related findings, and findings <-> CLI reference cross-links",
-      "status": "open"
+      "status": "done",
+      "iteration": 8,
+      "verified": [
+        "measured the link graph first, and the first measurement was WRONG — it read the whole page instead of <main> and reported 47 orphans. Re-measured against <main>: only / and /404 lack in-content inbound links, both correctly.",
+        "the real gap was that the link checker SKIPPED relative links as \"rare in Starlight output\", while the finding catalog links all 27 of its pages as ./rs-lock-001/ — the densest set of internal links on the site was the one set nothing verified",
+        "unskipping them found two live 404s: /agent/mcp/ linked ./rule/ (resolves to /agent/mcp/rule/, which does not exist) and the GitHub Action page linked ../internal/verdict/verdict.go, a repo path that is not a docs route. Both fixed at source; docs/action.md regenerated and tools/gencli tests pass.",
+        "a remark plugin now links every mention of a finding code to its page: 5 real cross-references that were plain text are now links, and every future mention is linked without anyone remembering to",
+        "the plugin skips codes with no page, self-references, fenced code blocks, and anything already inside a link",
+        "check-build.mjs now fails if the catalog does not link a finding page, or if any page links to itself — negative-tested"
+      ]
     },
     {
       "id": "SEO-9",
