@@ -1,0 +1,23 @@
+/*
+ * Content-level fixes Starlight does not ship. Loaded through `customCss`, so
+ * it lands in Starlight's cascade layers' wake and needs no !important.
+ */
+
+/*
+ * Wide tables scroll inside the focusable region that
+ * src/plugins/rehype-scrollable-tables.mjs wraps them in. The wrapper scrolls,
+ * not the table: Starlight makes the table itself `display: block; overflow:
+ * auto`, and a scroller that is not the focusable element is the exact axe
+ * failure (scrollable-region-focusable) the wrapper exists to fix.
+ */
+.sl-markdown-content .table-scroll {
+	overflow-x: auto;
+}
+.sl-markdown-content .table-scroll > table {
+	overflow: visible;
+}
+/* Focusable means a visible focus ring; the region has no other affordance. */
+.sl-markdown-content .table-scroll:focus-visible {
+	outline: 2px solid var(--sl-color-text-accent);
+	outline-offset: 2px;
+}

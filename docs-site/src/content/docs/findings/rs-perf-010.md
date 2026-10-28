@@ -10,7 +10,7 @@ RS-PERF-002 only fires when a statement has NO WHERE clause, but the real-world 
 
 ## Remediation
 
-Batch it. Loop over a bounded key range — UPDATE ... WHERE id BETWEEN :lo AND :hi AND <predicate> — committing each batch, so no single transaction holds locks over the whole table and autovacuum can keep up between batches. Ten to fifty thousand rows per batch is a common starting point. Run the backfill OUTSIDE the migration if your runner wraps migrations in one transaction, since batching inside a single transaction defeats the purpose. If the statement genuinely matches only a handful of rows, the upper bound reported here is conservative and you can disregard it.
+Batch it. Loop over a bounded key range — UPDATE ... WHERE id BETWEEN :lo AND :hi AND &lt;predicate> — committing each batch, so no single transaction holds locks over the whole table and autovacuum can keep up between batches. Ten to fifty thousand rows per batch is a common starting point. Run the backfill OUTSIDE the migration if your runner wraps migrations in one transaction, since batching inside a single transaction defeats the purpose. If the statement genuinely matches only a handful of rows, the upper bound reported here is conservative and you can disregard it.
 
 ## References
 

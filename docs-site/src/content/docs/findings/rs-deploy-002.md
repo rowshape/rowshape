@@ -10,7 +10,7 @@ REPLICA IDENTITY controls what a logical decoding stream can identify a changed 
 
 ## Remediation
 
-Check what consumes this table's changes before changing its identity: SELECT * FROM pg_publication_tables WHERE tablename = '<table>'; and check for active replication slots with SELECT * FROM pg_replication_slots. If you are dropping the index that backs REPLICA IDENTITY USING INDEX, set a new identity BEFORE dropping it, not after. If you need FULL, size the WAL increase first — it is proportional to update volume, not table size.
+Check what consumes this table's changes before changing its identity: SELECT * FROM pg_publication_tables WHERE tablename = '&lt;table>'; and check for active replication slots with SELECT * FROM pg_replication_slots. If you are dropping the index that backs REPLICA IDENTITY USING INDEX, set a new identity BEFORE dropping it, not after. If you need FULL, size the WAL increase first — it is proportional to update volume, not table size.
 
 ## References
 

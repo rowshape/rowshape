@@ -6,6 +6,7 @@ import { unified } from '@astrojs/markdown-remark';
 import { SITE, REPO } from './src/site.ts';
 import { lastmodFor } from './src/lastmod.ts';
 import remarkLinkFindingCodes from './src/plugins/remark-link-finding-codes.mjs';
+import rehypeScrollableTables from './src/plugins/rehype-scrollable-tables.mjs';
 
 // The one place the stack is deliberately not Go (PRD §9). The Go decision was
 // about the binary — single static artifact, no runtime, hydrate is CPU-bound —
@@ -25,7 +26,13 @@ export default defineConfig({
 		// The plugin turns every mention of a finding code into a link to that
 		// finding's page; see the plugin for why that is generated rather than
 		// written by hand.
-		processor: unified({ remarkPlugins: [remarkLinkFindingCodes] }),
+		//
+		// The rehype plugin wraps each table in a focusable, named scroll region
+		// so a keyboard user can scroll a wide one; see the plugin.
+		processor: unified({
+			remarkPlugins: [remarkLinkFindingCodes],
+			rehypePlugins: [rehypeScrollableTables],
+		}),
 	},
 	integrations: [
 		// Declared explicitly so it can be configured. Starlight adds
@@ -53,6 +60,20 @@ export default defineConfig({
 			// Search loads its 94 KB UI on intent instead of on every page's idle
 			// callback. See the component.
 			components: { Search: './src/components/Search.astro' },
+			customCss: ['./src/styles/content.css'],
+			// Long commands wrap instead of scrolling. A scrolling block at phone
+			// width is a horizontal scroller, which Expressive Code makes focusable by
+			// turning it into an unnamed role=region — two of those on a page fail
+			// axe's landmark-unique, and a wrapped `docker run ...` is easier to read
+			// than a half-hidden one anyway. Wrapped lines keep their indent.
+			//
+			// No per-language exceptions: Expressive Code only makes a scroller
+			// focusable from JS, after an idle callback, so any block left to scroll
+			// is one a keyboard cannot reach until then (or at all without JS). The
+			// one aligned diagram (the MCP tool loop) is written to fit a phone.
+			expressiveCode: {
+				defaultProps: { wrap: true, preserveIndent: true },
+			},
 			social: [
 				{ icon: 'github', label: 'GitHub', href: REPO },
 			],

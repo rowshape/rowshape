@@ -57,13 +57,17 @@ nothing.
 The four compose into the loop the [agent rule](../rule/) tells the agent to run:
 
 ```text
-describe_shape        →  read the shape before writing SQL
-   ↓ (write migration)
-validate_migration    →  PASS? ship it.
-   ↓ WARN / FAIL
-explain_finding CODE  →  get the fix
-   ↓ (rewrite)
-validate_migration    →  PASS.
+describe_shape
+  → read the shape before SQL
+  ↓ (write migration)
+validate_migration
+  → PASS? ship it.
+  ↓ WARN / FAIL
+explain_finding CODE
+  → get the fix
+  ↓ (rewrite)
+validate_migration
+  → PASS.
 ```
 
 A WARN is not a pass and a FAIL is not an opinion — the rule is explicit about

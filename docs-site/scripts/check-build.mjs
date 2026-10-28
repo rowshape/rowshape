@@ -936,6 +936,41 @@ async function checkCriticalPath(pages) {
 	return [...problems, ...over];
 }
 
+/**
+ * Tables a keyboard can scroll, and headers a screen reader can read.
+ *
+ * At 375px seven content tables scrolled sideways with nothing focusable to
+ * scroll them by (axe scrollable-region-focusable), and the privacy matrix
+ * opened with an empty <th>, so its first column was announced as nothing.
+ * src/plugins/rehype-scrollable-tables.mjs now wraps every table in a named,
+ * focusable region. This holds the line: a table that reaches dist/ any other
+ * way — an .mdx page, raw HTML, a plugin-order change — fails here, as does a
+ * header cell with no text, or two table regions on one page with one name.
+ */
+async function checkTables(pages) {
+	const problems = [];
+	const WRAP = /<div class="table-scroll" role="region" tabindex="0" aria-label="([^"]+)">\s*$/;
+	for (const page of pages) {
+		const html = await readFile(page, 'utf8');
+		const rel = page.replace(/\\/g, '/');
+		const labels = new Set();
+		for (const m of html.matchAll(/<table\b/g)) {
+			const wrap = html.slice(Math.max(0, m.index - 300), m.index).match(WRAP);
+			if (!wrap) {
+				problems.push(`${rel}: a <table> outside a focusable, labelled .table-scroll region`);
+				continue;
+			}
+			if (labels.has(wrap[1])) problems.push(`${rel}: two table regions named "${wrap[1]}"`);
+			labels.add(wrap[1]);
+		}
+		for (const m of html.matchAll(/<th\b([^>]*)>([\s\S]*?)<\/th>/g)) {
+			const text = m[2].replace(/<[^>]*>/g, '').replace(/&nbsp;|&#160;/g, ' ').trim();
+			if (!text && !/\baria-label="[^"]+"/.test(m[1])) problems.push(`${rel}: empty <th> — a header cell with no name`);
+		}
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -966,8 +1001,14 @@ async function main() {
 	const noindex = await checkNoindex(pages);
 	const critical = await checkCriticalPath(pages);
 	const selfLinks = await checkSelfLinks(pages);
+	const tables = await checkTables(pages);
 
 	let failed = false;
+	if (tables.length) {
+		failed = true;
+		console.error(`${tables.length} table accessibility problem(s):`);
+		for (const t of tables) console.error(`  ${t}`);
+	}
 	if (critical.length) {
 		failed = true;
 		console.error(`${critical.length} critical-path problem(s):`);
@@ -1048,7 +1089,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB initial + ${DEFERRED_JS_BUDGET_BYTES / 1024} KiB deferred JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, every table keyboard-scrollable with named headers, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB initial + ${DEFERRED_JS_BUDGET_BYTES / 1024} KiB deferred JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
 }
 
 await main();

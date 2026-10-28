@@ -10,7 +10,7 @@ ATTACH PARTITION takes ACCESS EXCLUSIVE on the PARENT table — blocking every q
 
 ## Remediation
 
-Add a CHECK constraint matching the partition bound to the incoming table BEFORE attaching, and validate it separately: ALTER TABLE incoming ADD CONSTRAINT c CHECK (<bound>) NOT VALID; then VALIDATE CONSTRAINT c; then ATTACH. With the constraint already proven, ATTACH skips the scan and the lock is brief. On PostgreSQL 14+, prefer DETACH PARTITION CONCURRENTLY for the reverse direction.
+Add a CHECK constraint matching the partition bound to the incoming table BEFORE attaching, and validate it separately: ALTER TABLE incoming ADD CONSTRAINT c CHECK (&lt;bound>) NOT VALID; then VALIDATE CONSTRAINT c; then ATTACH. With the constraint already proven, ATTACH skips the scan and the lock is brief. On PostgreSQL 14+, prefer DETACH PARTITION CONCURRENTLY for the reverse direction.
 
 ## References
 

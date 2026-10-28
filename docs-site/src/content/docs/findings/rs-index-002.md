@@ -10,7 +10,7 @@ Adding a PRIMARY KEY or UNIQUE constraint over existing data builds a unique ind
 
 ## Remediation
 
-Build the index first without the exclusive lock, then adopt it: CREATE UNIQUE INDEX CONCURRENTLY on the column(s), then attach it with ALTER TABLE ... ADD PRIMARY KEY/UNIQUE USING INDEX <name>, which holds the exclusive lock only briefly. For a PRIMARY KEY, ensure the column is already NOT NULL first (add a validated CHECK (col IS NOT NULL) if needed).
+Build the index first without the exclusive lock, then adopt it: CREATE UNIQUE INDEX CONCURRENTLY on the column(s), then attach it with ALTER TABLE ... ADD PRIMARY KEY/UNIQUE USING INDEX &lt;name>, which holds the exclusive lock only briefly. For a PRIMARY KEY, ensure the column is already NOT NULL first (add a validated CHECK (col IS NOT NULL) if needed).
 
 ## References
 

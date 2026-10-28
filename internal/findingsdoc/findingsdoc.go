@@ -30,8 +30,17 @@ func Namespace(code string) string {
 	return code[:i]
 }
 
+// Prose makes catalog text safe to drop into Markdown as a paragraph. The
+// catalog writes placeholders the way a terminal reader expects — `<table>`,
+// `<name>`, `<predicate>` — and Markdown passes those through as raw HTML: the
+// browser drew an empty <table> on RS-DEPLOY-002 and swallowed the others as
+// unknown elements, so the page read "tablename = ''". Escaping `<` keeps the
+// rendered text identical to `rowshape explain`, which is what readers compare.
+func Prose(s string) string { return strings.ReplaceAll(s, "<", "&lt;") }
+
 // Page renders one finding's catalog page. The remediation is copied from the
-// Explanation verbatim, so it is byte-identical to `rowshape explain <code>`.
+// Explanation verbatim (through Prose), so it renders identically to
+// `rowshape explain <code>`.
 func Page(e findings.Explanation) string {
 	var b strings.Builder
 	// Frontmatter. Values are single-quoted and internal quotes doubled so a
@@ -42,9 +51,9 @@ func Page(e findings.Explanation) string {
 	fmt.Fprintf(&b, "---\n\n")
 
 	fmt.Fprintf(&b, "**Namespace:** `%s` · **Code:** `%s`\n\n", Namespace(e.Code), e.Code)
-	fmt.Fprintf(&b, "%s\n\n", e.Summary)
+	fmt.Fprintf(&b, "%s\n\n", Prose(e.Summary))
 
-	fmt.Fprintf(&b, "## Remediation\n\n%s\n\n", e.Remediation)
+	fmt.Fprintf(&b, "## Remediation\n\n%s\n\n", Prose(e.Remediation))
 
 	if len(e.References) > 0 {
 		fmt.Fprintf(&b, "## References\n\n")
