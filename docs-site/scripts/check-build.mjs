@@ -30,6 +30,23 @@ const DIST = 'dist';
 const JS_BUDGET_BYTES = 32 * 1024;
 
 /**
+ * The ceiling for JS a page can pull in LATER — the targets of dynamic import()
+ * in the modules it loads, plus everything those statically import.
+ *
+ * This is the half the budget above used to miss. It counted <script src>, and
+ * Starlight's search launcher is a 3 KB <script src> whose one job was to
+ * import() the 94 KB Pagefind UI on the first idle tick of every page — so the
+ * site shipped ~100 KB of JS per visit while this check reported 11-14. The
+ * launcher now loads that chunk only on search intent (src/components/
+ * Search.astro), which is what makes "deferred" a separate, honest number:
+ * bytes a visitor pays for only if they reach for the feature.
+ *
+ * The cap sits ~20 KiB over the Pagefind UI, so a second lazy feature of that
+ * size, or a lazy-loaded framework, has to be a decision.
+ */
+const DEFERRED_JS_BUDGET_BYTES = 112 * 1024;
+
+/**
  * The render-blocking CSS budget, in bytes, per page.
  *
  * Measured before it was set: the heaviest page (a CLI reference page, which
@@ -99,35 +116,112 @@ async function checkLinks(pages) {
 	return broken;
 }
 
+/**
+ * The local modules a JS file imports, split by how: a static import loads with
+ * the importer, a dynamic import() only when the code reaches it. Bundler output
+ * is regular enough for a regex — `from"./x.js"`, `import"./x.js"`,
+ * import(`./x.js`) — and a specifier this misses (a computed one, like
+ * Pagefind's own `${bundlePath}pagefind.js`) is not ours to resolve anyway.
+ */
+function moduleImports(code) {
+	const local = (spec) => /^(\.{1,2}\/|\/)/.test(spec);
+	const statics = [...code.matchAll(/(?:\bfrom|\bimport)\s*["'`]([^"'`]+)["'`]/g)].map((m) => m[1]);
+	const dynamics = [...code.matchAll(/\bimport\s*\(\s*["'`]([^"'`$]+)["'`]\s*\)/g)].map((m) => m[1]);
+	return { statics: statics.filter(local), dynamics: dynamics.filter(local) };
+}
+
+/** Resolve an import specifier against the URL path of the module it is in. */
+function resolveModule(spec, fromUrl) {
+	return new URL(spec, `http://x${fromUrl}`).pathname;
+}
+
 async function checkJSBudget(pages) {
 	const over = [];
+	const cache = new Map(); // url -> { size, statics, dynamics }
+	async function mod(url) {
+		if (!cache.has(url)) {
+			const path = join(DIST, url);
+			if (!existsSync(path)) cache.set(url, null);
+			else {
+				const code = await readFile(path, 'utf8');
+				const { statics, dynamics } = moduleImports(code);
+				cache.set(url, {
+					size: Buffer.byteLength(code, 'utf8'),
+					statics: statics.map((s) => resolveModule(s, url)),
+					dynamics: dynamics.map((s) => resolveModule(s, url)),
+				});
+			}
+		}
+		return cache.get(url);
+	}
+	// Walk static edges from `roots` into `seen`; collect dynamic edges as we go.
+	async function closure(roots, seen, dyn) {
+		const queue = [...roots];
+		while (queue.length) {
+			const url = queue.pop();
+			if (seen.has(url)) continue;
+			const m = await mod(url);
+			if (!m) continue;
+			seen.add(url);
+			queue.push(...m.statics);
+			dyn.push(...m.dynamics);
+		}
+	}
+	const sum = async (set) => {
+		let n = 0;
+		for (const url of set) n += (await mod(url)).size;
+		return n;
+	};
+
 	for (const page of pages) {
 		const html = await readFile(page, 'utf8');
+		const rel = page.replace(/\\/g, '/');
 
-		// Module scripts the page actually loads.
-		let total = 0;
-		const loaded = [];
+		// Initial: module scripts the page loads, everything they statically
+		// import, and inline scripts (and their static imports).
+		let inline = 0;
+		const roots = [];
+		const dyn = [];
 		for (const m of html.matchAll(/<script[^>]*\bsrc="([^"]+)"/g)) {
-			const src = m[1];
-			if (!src.startsWith('/')) continue;
-			const path = join(DIST, src);
-			if (!existsSync(path)) continue;
-			total += (await stat(path)).size;
-			loaded.push(src);
+			if (m[1].startsWith('/')) roots.push(m[1]);
 		}
 		// Inline scripts ship on the page itself and count too — except JSON-LD,
 		// which is a data block the browser never executes. Charging structured
 		// data to a budget that exists to keep framework runtimes out would make
 		// the two compete, and the answer would be to drop the metadata.
+		const pageUrl = '/' + rel.slice(DIST.length + 1).replace(/index\.html$/, '');
 		for (const m of html.matchAll(/<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/g)) {
 			if (/type="application\/ld\+json"/.test(m[1])) continue;
-			total += Buffer.byteLength(m[2], 'utf8');
+			inline += Buffer.byteLength(m[2], 'utf8');
+			const { statics, dynamics } = moduleImports(m[2]);
+			roots.push(...statics.map((s) => resolveModule(s, pageUrl)));
+			dyn.push(...dynamics.map((s) => resolveModule(s, pageUrl)));
 		}
+		const initialSet = new Set();
+		await closure(roots, initialSet, dyn);
+		const initial = inline + (await sum(initialSet));
 
-		const rel = page.replace(/\\/g, '/');
-		console.log(`  ${(total / 1024).toFixed(1)} KiB JS  ${rel}  (${loaded.length} module script(s))`);
-		if (total > JS_BUDGET_BYTES) {
-			over.push(`${rel}: ${total} bytes of client JS, over the ${JS_BUDGET_BYTES} budget`);
+		// Deferred: what dynamic imports would add on top, transitively.
+		const deferredSet = new Set(initialSet);
+		const more = [];
+		while (dyn.length) {
+			await closure(dyn.splice(0), deferredSet, more);
+			dyn.push(...more.splice(0));
+		}
+		for (const url of initialSet) deferredSet.delete(url);
+		const deferred = await sum(deferredSet);
+
+		console.log(
+			`  ${(initial / 1024).toFixed(1)} KiB JS + ${(deferred / 1024).toFixed(1)} KiB deferred  ${rel}  ` +
+				`(${initialSet.size} module(s) on load, ${deferredSet.size} on demand)`
+		);
+		if (initial > JS_BUDGET_BYTES) {
+			over.push(`${rel}: ${initial} bytes of client JS on load, over the ${JS_BUDGET_BYTES} budget`);
+		}
+		if (deferred > DEFERRED_JS_BUDGET_BYTES) {
+			over.push(
+				`${rel}: ${deferred} bytes of client JS behind dynamic import(), over the ${DEFERRED_JS_BUDGET_BYTES} deferred budget`
+			);
 		}
 	}
 	return over;
@@ -966,6 +1060,41 @@ async function checkHeaders() {
 }
 
 /**
+ * Tables a keyboard can scroll, and headers a screen reader can read.
+ *
+ * At 375px seven content tables scrolled sideways with nothing focusable to
+ * scroll them by (axe scrollable-region-focusable), and the privacy matrix
+ * opened with an empty <th>, so its first column was announced as nothing.
+ * src/plugins/rehype-scrollable-tables.mjs now wraps every table in a named,
+ * focusable region. This holds the line: a table that reaches dist/ any other
+ * way — an .mdx page, raw HTML, a plugin-order change — fails here, as does a
+ * header cell with no text, or two table regions on one page with one name.
+ */
+async function checkTables(pages) {
+	const problems = [];
+	const WRAP = /<div class="table-scroll" role="region" tabindex="0" aria-label="([^"]+)">\s*$/;
+	for (const page of pages) {
+		const html = await readFile(page, 'utf8');
+		const rel = page.replace(/\\/g, '/');
+		const labels = new Set();
+		for (const m of html.matchAll(/<table\b/g)) {
+			const wrap = html.slice(Math.max(0, m.index - 300), m.index).match(WRAP);
+			if (!wrap) {
+				problems.push(`${rel}: a <table> outside a focusable, labelled .table-scroll region`);
+				continue;
+			}
+			if (labels.has(wrap[1])) problems.push(`${rel}: two table regions named "${wrap[1]}"`);
+			labels.add(wrap[1]);
+		}
+		for (const m of html.matchAll(/<th\b([^>]*)>([\s\S]*?)<\/th>/g)) {
+			const text = m[2].replace(/<[^>]*>/g, '').replace(/&nbsp;|&#160;/g, ' ').trim();
+			if (!text && !/\baria-label="[^"]+"/.test(m[1])) problems.push(`${rel}: empty <th> — a header cell with no name`);
+		}
+	}
+	return problems;
+}
+
+/**
  * The CSP that gen-csp.mjs wrote must allow every inline script dist/ actually
  * contains. This re-derives the hashes from the built pages rather than trusting
  * the generator: a page added by a later build step, a generator that silently
@@ -1013,6 +1142,50 @@ async function checkCSP(pages) {
 	}
 	for (const [h, page] of missing) {
 		problems.push(`CSP script-src lacks ${h}, an inline script on ${page} (and maybe others) — the browser will refuse to run it`);
+	}
+	return problems;
+}
+
+/**
+ * The icon set and the social card's weight.
+ *
+ * /favicon.ico is fetched unprompted — by feed readers, unfurlers, bookmark
+ * sync — whatever the HTML says, so a missing one is a 404 in every log and a
+ * blank tile in every one of those places. The site shipped only Starlight's
+ * placeholder star as an SVG until SITE-7. og.png is downloaded by every link
+ * preview, usually on a phone; palette-encoding took it from 55 KiB to 17, and
+ * 40 KiB is where a truecolour regression would land. The PNG headers are read
+ * by hand, as in checkSocialCard, to keep this script dependency-free.
+ */
+const OG_MAX_BYTES = 40 * 1024;
+
+async function checkIcons() {
+	const problems = [];
+	const ico = join(DIST, 'favicon.ico');
+	if (!existsSync(ico)) problems.push('dist/favicon.ico missing — run `npm run icons` and commit public/favicon.ico');
+	else {
+		const buf = await readFile(ico);
+		// ICONDIR: reserved 0, type 1 (icon), count >= 1; first entry width byte.
+		if (buf.length < 22 || buf.readUInt16LE(0) !== 0 || buf.readUInt16LE(2) !== 1 || buf.readUInt16LE(4) < 1) {
+			problems.push('dist/favicon.ico is not an ICO file');
+		} else if (buf[6] !== 32 || buf[7] !== 32) {
+			problems.push(`dist/favicon.ico first image is ${buf[6] || 256}x${buf[7] || 256}, expected 32x32`);
+		}
+	}
+	const touch = join(DIST, 'apple-touch-icon.png');
+	if (!existsSync(touch)) problems.push('dist/apple-touch-icon.png missing — run `npm run icons`');
+	else {
+		const size = pngSize(await readFile(touch));
+		if (!size || size.width !== 180 || size.height !== 180) problems.push('dist/apple-touch-icon.png is not a 180x180 PNG');
+	}
+	const head = await readFile(join(DIST, 'index.html'), 'utf8');
+	if (!/<link rel="apple-touch-icon" href="\/apple-touch-icon\.png"/.test(head)) {
+		problems.push('homepage does not link apple-touch-icon');
+	}
+	const og = join(DIST, 'og.png');
+	if (existsSync(og)) {
+		const n = (await stat(og)).size;
+		if (n > OG_MAX_BYTES) problems.push(`dist/og.png is ${n} bytes, over ${OG_MAX_BYTES} — palette-encode it (npm run og)`);
 	}
 	return problems;
 }
@@ -1180,12 +1353,24 @@ async function main() {
 	const critical = await checkCriticalPath(pages);
 	const selfLinks = await checkSelfLinks(pages);
 	const security = [...(await checkHeaders()), ...(await checkCSP(pages)), ...(await checkSecurityTxt())];
+	const tables = await checkTables(pages);
+	const icons = await checkIcons();
 
 	let failed = false;
 	if (security.length) {
 		failed = true;
 		console.error(`${security.length} security problem(s) (headers, CSP, security.txt):`);
 		for (const s of security) console.error(`  ${s}`);
+	}
+	if (icons.length) {
+		failed = true;
+		console.error(`${icons.length} icon/social-card problem(s):`);
+		for (const i of icons) console.error(`  ${i}`);
+	}
+	if (tables.length) {
+		failed = true;
+		console.error(`${tables.length} table accessibility problem(s):`);
+		for (const t of tables) console.error(`  ${t}`);
 	}
 	if (critical.length) {
 		failed = true;
@@ -1257,7 +1442,7 @@ async function main() {
 	}
 	if (over.length) {
 		failed = true;
-		console.error(`\n${over.length} page(s) over the client-JS budget:`);
+		console.error(`\n${over.length} client-JS budget problem(s):`);
 		for (const o of over) console.error(`  ${o}`);
 		console.error(
 			'\nStarlight ships a little progressive-enhancement JS by design; a framework\n' +
@@ -1278,7 +1463,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, security headers and immutable caching in _headers, a CSP that allows every inline script, a current security.txt, no internal planning references, every finding in the sidebar by code, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card (under 40 KiB), favicon.ico and touch icon present, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, every table keyboard-scrollable with named headers, noindex only on the 404, no third-party origins, security headers and immutable caching in _headers, a CSP that allows every inline script, a current security.txt, no internal planning references, every finding in the sidebar by code, all within the ${JS_BUDGET_BYTES / 1024} KiB initial + ${DEFERRED_JS_BUDGET_BYTES / 1024} KiB deferred JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
 }
 
 await main();

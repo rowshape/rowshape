@@ -30,8 +30,17 @@ func Namespace(code string) string {
 	return code[:i]
 }
 
+// Prose makes catalog text safe to drop into Markdown as a paragraph. The
+// catalog writes placeholders the way a terminal reader expects — `<table>`,
+// `<name>`, `<predicate>` — and Markdown passes those through as raw HTML: the
+// browser drew an empty <table> on RS-DEPLOY-002 and swallowed the others as
+// unknown elements, so the page read "tablename = ''". Escaping `<` keeps the
+// rendered text identical to `rowshape explain`, which is what readers compare.
+func Prose(s string) string { return strings.ReplaceAll(s, "<", "&lt;") }
+
 // Page renders one finding's catalog page. The remediation is copied from the
-// Explanation verbatim, so it is byte-identical to `rowshape explain <code>`.
+// Explanation verbatim (through Prose), so it renders identically to
+// `rowshape explain <code>`.
 func Page(e findings.Explanation) string {
 	var b strings.Builder
 	// Frontmatter. Values are single-quoted and internal quotes doubled so a
@@ -58,7 +67,7 @@ func Page(e findings.Explanation) string {
 	// A fixed order on every page, so a reader who has seen one finding page can
 	// find the fix on any other without reading: what it is, what it costs, a
 	// migration that triggers it, what to write instead, and its neighbours.
-	fmt.Fprintf(&b, "## What it means\n\n%s\n\n", e.Summary)
+	fmt.Fprintf(&b, "## What it means\n\n%s\n\n", Prose(e.Summary))
 
 	guide := pageGuides[e.Code]
 	if guide.Why != "" {
@@ -78,7 +87,7 @@ func Page(e findings.Explanation) string {
 
 	// The remediation is the catalog's, verbatim — it is what a verdict carries
 	// and what `rowshape explain` prints. The worked fix follows it.
-	fmt.Fprintf(&b, "## How to fix\n\n%s\n\n", e.Remediation)
+	fmt.Fprintf(&b, "## How to fix\n\n%s\n\n", Prose(e.Remediation))
 	if hasExample {
 		if ex.FixedNote != "" {
 			fmt.Fprintf(&b, "**For the example above.** %s\n\n", ex.FixedNote)

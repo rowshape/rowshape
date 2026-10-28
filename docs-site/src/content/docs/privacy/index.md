@@ -20,7 +20,7 @@ data can tolerate, use `strict`, which emits none of it.
 
 ## What each privacy level reveals
 
-| | `strict` | `standard` (default) | `permissive` |
+| Fixture contents | `strict` | `standard` (default) | `permissive` |
 | --- | --- | --- | --- |
 | Structure, types, nullability, constraints, indexes | ✅ | ✅ | ✅ |
 | Row counts, null fractions, distinct estimates | ✅ | ✅ | ✅ |

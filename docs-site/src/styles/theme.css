@@ -1,0 +1,45 @@
+/*
+ * The brand accent: #2E4A7D, the colour the README's badges already use, so the
+ * repo, the npm page and the site read as one thing instead of Starlight's
+ * default indigo.
+ *
+ * Starlight reads three accent steps per theme. In light mode the middle one is
+ * the link colour and the fill behind white text (primary button, current
+ * sidebar item); in dark mode the high one is. So the brand colour itself is
+ * the light-mode accent, and dark mode gets a lighter tint of the same hue —
+ * #2E4A7D on a near-black page is 2.3:1, unreadable as a link.
+ *
+ * Contrast, computed (WCAG 2.x relative luminance) for every pairing Starlight
+ * draws with these, all AA (4.5:1 text, 3:1 non-text):
+ *
+ *   light  accent #2e4a7d on page #fff ........................ 8.78
+ *          accent on nav/sidebar/inline-code #edeef3 .......... 7.58
+ *          #fff on accent (button, current page, skip link) ... 8.78
+ *          accent-high #1e3052 on accent-low #dbe4f5 ......... 10.27
+ *          text #17181c on accent-low (focused search hit) ... 13.88
+ *   dark   accent-high #bdd2fa on page #17181c ............... 11.63
+ *          accent-high on nav/sidebar #23262f ................. 9.90
+ *          accent-low #1e2d48 on accent-high (current page) ... 9.03
+ *          #17181c on accent-high (primary button) ........... 11.63
+ *          #fff on accent-low (focused search hit) ........... 13.78
+ *          accent #628cda on page (focus rings, borders) ...... 5.31
+ *
+ * Change a value here and recompute; the numbers are the reason for the values.
+ */
+:root {
+	--sl-color-accent-low: hsl(219, 42%, 20%);
+	--sl-color-accent: hsl(219, 62%, 62%);
+	--sl-color-accent-high: hsl(219, 85%, 86%);
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: hsl(219, 55%, 91%);
+	--sl-color-accent: #2e4a7d;
+	--sl-color-accent-high: hsl(219, 47%, 22%);
+}
+
+/* Starlight sizes the logo to the full header height (40px), which makes a
+   solid square louder than the name beside it. Cap-height-ish instead. */
+.site-title img {
+	height: 1.75rem;
+}

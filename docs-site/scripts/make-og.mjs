@@ -13,7 +13,7 @@
 // Fonts are named as a stack ending in a generic family so that regenerating on
 // a machine without Liberation/DejaVu degrades to something rather than nothing.
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import sharp from 'sharp';
 
 const W = 1200;
@@ -31,16 +31,17 @@ const GREEN = '#4ade80';
 const SANS = "Liberation Sans, Helvetica, Arial, sans-serif";
 const MONO = "DejaVu Sans Mono, Liberation Mono, monospace";
 
-// The mark from public/favicon.svg, unchanged. It is geometry, not type, so it
-// rasterizes identically everywhere — which is exactly why the brand element
-// that carries the most weight here is the one with no font dependency.
-const MARK = `<path fill-rule="evenodd" d="M81 36 64 0 47 36l-1 2-9-10a6 6 0 0 0-9 9l10 10h-2L0 64l36 17h2L28 91a6 6 0 1 0 9 9l9-10 1 2 17 36 17-36v-2l9 10a6 6 0 1 0 9-9l-9-9 2-1 36-17-36-17-2-1 9-9a6 6 0 1 0-9-9l-9 10v-2Zm-17 2-2 5c-4 8-11 15-19 19l-5 2 5 2c8 4 15 11 19 19l2 5 2-5c4-8 11-15 19-19l5-2-5-2c-8-4-15-11-19-19l-2-5Z" clip-rule="evenodd"/><path d="M118 19a6 6 0 0 0-9-9l-3 3a6 6 0 1 0 9 9l3-3Zm-96 4c-2 2-6 2-9 0l-3-3a6 6 0 1 1 9-9l3 3c3 2 3 6 0 9Zm0 82c-2-2-6-2-9 0l-3 3a6 6 0 1 0 9 9l3-3c3-2 3-6 0-9Zm96 4a6 6 0 0 1-9 9l-3-3a6 6 0 1 1 9-9l3 3Z"/>`;
+// The mark, read from public/favicon.svg rather than copied, so the card cannot
+// drift from the favicon. It is geometry, not type, so it rasterizes identically
+// everywhere — which is exactly why the brand element that carries the most
+// weight here is the one with no font dependency.
+const MARK = (await readFile('public/favicon.svg', 'utf8')).replace(/^<svg[^>]*>|<\/svg>\s*$/g, '');
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
   <rect width="${W}" height="${H}" fill="${BG}"/>
 
   <!-- Mark + wordmark, sharing a baseline. -->
-  <g transform="translate(80 74) scale(0.5)" fill="${WHITE}">${MARK}</g>
+  <g transform="translate(80 74) scale(2)">${MARK}</g>
   <text x="176" y="146" font-family="${SANS}" font-size="76" font-weight="bold"
         fill="${WHITE}" letter-spacing="-2">rowshape</text>
 
@@ -64,7 +65,14 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" 
 </svg>`;
 
 await mkdir('public', { recursive: true });
-const png = await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer();
+// Palette-encoded. The card is flat colour plus antialiased text — a few dozen
+// distinct colours — so a 64-entry palette is visually lossless (checked by
+// eye at 3x on the wordmark and the terminal text), and it took the file from
+// 55 KiB of truecolour to 17. Every unfurl of every link downloads this, often
+// on a phone. check-build holds it under 40 KiB.
+const png = await sharp(Buffer.from(svg))
+	.png({ palette: true, colours: 64, effort: 10, compressionLevel: 9 })
+	.toBuffer();
 await writeFile('public/og.png', png);
 
 const { width, height } = await sharp(png).metadata();

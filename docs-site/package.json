@@ -11,6 +11,7 @@
 		"check": "node scripts/check-build.mjs",
 		"verify": "npm run build && npm run check",
 		"og": "node scripts/make-og.mjs",
+		"icons": "node scripts/make-icons.mjs",
 		"lastmod": "node scripts/gen-lastmod.mjs"
 	},
 	"dependencies": {
