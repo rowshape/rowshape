@@ -29,6 +29,23 @@ const DIST = 'dist';
 const JS_BUDGET_BYTES = 32 * 1024;
 
 /**
+ * The ceiling for JS a page can pull in LATER — the targets of dynamic import()
+ * in the modules it loads, plus everything those statically import.
+ *
+ * This is the half the budget above used to miss. It counted <script src>, and
+ * Starlight's search launcher is a 3 KB <script src> whose one job was to
+ * import() the 94 KB Pagefind UI on the first idle tick of every page — so the
+ * site shipped ~100 KB of JS per visit while this check reported 11-14. The
+ * launcher now loads that chunk only on search intent (src/components/
+ * Search.astro), which is what makes "deferred" a separate, honest number:
+ * bytes a visitor pays for only if they reach for the feature.
+ *
+ * The cap sits ~20 KiB over the Pagefind UI, so a second lazy feature of that
+ * size, or a lazy-loaded framework, has to be a decision.
+ */
+const DEFERRED_JS_BUDGET_BYTES = 112 * 1024;
+
+/**
  * The render-blocking CSS budget, in bytes, per page.
  *
  * Measured before it was set: the heaviest page (a CLI reference page, which
@@ -98,35 +115,112 @@ async function checkLinks(pages) {
 	return broken;
 }
 
+/**
+ * The local modules a JS file imports, split by how: a static import loads with
+ * the importer, a dynamic import() only when the code reaches it. Bundler output
+ * is regular enough for a regex — `from"./x.js"`, `import"./x.js"`,
+ * import(`./x.js`) — and a specifier this misses (a computed one, like
+ * Pagefind's own `${bundlePath}pagefind.js`) is not ours to resolve anyway.
+ */
+function moduleImports(code) {
+	const local = (spec) => /^(\.{1,2}\/|\/)/.test(spec);
+	const statics = [...code.matchAll(/(?:\bfrom|\bimport)\s*["'`]([^"'`]+)["'`]/g)].map((m) => m[1]);
+	const dynamics = [...code.matchAll(/\bimport\s*\(\s*["'`]([^"'`$]+)["'`]\s*\)/g)].map((m) => m[1]);
+	return { statics: statics.filter(local), dynamics: dynamics.filter(local) };
+}
+
+/** Resolve an import specifier against the URL path of the module it is in. */
+function resolveModule(spec, fromUrl) {
+	return new URL(spec, `http://x${fromUrl}`).pathname;
+}
+
 async function checkJSBudget(pages) {
 	const over = [];
+	const cache = new Map(); // url -> { size, statics, dynamics }
+	async function mod(url) {
+		if (!cache.has(url)) {
+			const path = join(DIST, url);
+			if (!existsSync(path)) cache.set(url, null);
+			else {
+				const code = await readFile(path, 'utf8');
+				const { statics, dynamics } = moduleImports(code);
+				cache.set(url, {
+					size: Buffer.byteLength(code, 'utf8'),
+					statics: statics.map((s) => resolveModule(s, url)),
+					dynamics: dynamics.map((s) => resolveModule(s, url)),
+				});
+			}
+		}
+		return cache.get(url);
+	}
+	// Walk static edges from `roots` into `seen`; collect dynamic edges as we go.
+	async function closure(roots, seen, dyn) {
+		const queue = [...roots];
+		while (queue.length) {
+			const url = queue.pop();
+			if (seen.has(url)) continue;
+			const m = await mod(url);
+			if (!m) continue;
+			seen.add(url);
+			queue.push(...m.statics);
+			dyn.push(...m.dynamics);
+		}
+	}
+	const sum = async (set) => {
+		let n = 0;
+		for (const url of set) n += (await mod(url)).size;
+		return n;
+	};
+
 	for (const page of pages) {
 		const html = await readFile(page, 'utf8');
+		const rel = page.replace(/\\/g, '/');
 
-		// Module scripts the page actually loads.
-		let total = 0;
-		const loaded = [];
+		// Initial: module scripts the page loads, everything they statically
+		// import, and inline scripts (and their static imports).
+		let inline = 0;
+		const roots = [];
+		const dyn = [];
 		for (const m of html.matchAll(/<script[^>]*\bsrc="([^"]+)"/g)) {
-			const src = m[1];
-			if (!src.startsWith('/')) continue;
-			const path = join(DIST, src);
-			if (!existsSync(path)) continue;
-			total += (await stat(path)).size;
-			loaded.push(src);
+			if (m[1].startsWith('/')) roots.push(m[1]);
 		}
 		// Inline scripts ship on the page itself and count too — except JSON-LD,
 		// which is a data block the browser never executes. Charging structured
 		// data to a budget that exists to keep framework runtimes out would make
 		// the two compete, and the answer would be to drop the metadata.
+		const pageUrl = '/' + rel.slice(DIST.length + 1).replace(/index\.html$/, '');
 		for (const m of html.matchAll(/<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/g)) {
 			if (/type="application\/ld\+json"/.test(m[1])) continue;
-			total += Buffer.byteLength(m[2], 'utf8');
+			inline += Buffer.byteLength(m[2], 'utf8');
+			const { statics, dynamics } = moduleImports(m[2]);
+			roots.push(...statics.map((s) => resolveModule(s, pageUrl)));
+			dyn.push(...dynamics.map((s) => resolveModule(s, pageUrl)));
 		}
+		const initialSet = new Set();
+		await closure(roots, initialSet, dyn);
+		const initial = inline + (await sum(initialSet));
 
-		const rel = page.replace(/\\/g, '/');
-		console.log(`  ${(total / 1024).toFixed(1)} KiB JS  ${rel}  (${loaded.length} module script(s))`);
-		if (total > JS_BUDGET_BYTES) {
-			over.push(`${rel}: ${total} bytes of client JS, over the ${JS_BUDGET_BYTES} budget`);
+		// Deferred: what dynamic imports would add on top, transitively.
+		const deferredSet = new Set(initialSet);
+		const more = [];
+		while (dyn.length) {
+			await closure(dyn.splice(0), deferredSet, more);
+			dyn.push(...more.splice(0));
+		}
+		for (const url of initialSet) deferredSet.delete(url);
+		const deferred = await sum(deferredSet);
+
+		console.log(
+			`  ${(initial / 1024).toFixed(1)} KiB JS + ${(deferred / 1024).toFixed(1)} KiB deferred  ${rel}  ` +
+				`(${initialSet.size} module(s) on load, ${deferredSet.size} on demand)`
+		);
+		if (initial > JS_BUDGET_BYTES) {
+			over.push(`${rel}: ${initial} bytes of client JS on load, over the ${JS_BUDGET_BYTES} budget`);
+		}
+		if (deferred > DEFERRED_JS_BUDGET_BYTES) {
+			over.push(
+				`${rel}: ${deferred} bytes of client JS behind dynamic import(), over the ${DEFERRED_JS_BUDGET_BYTES} deferred budget`
+			);
 		}
 	}
 	return over;
@@ -944,7 +1038,7 @@ async function main() {
 	}
 	if (over.length) {
 		failed = true;
-		console.error(`\n${over.length} page(s) over the client-JS budget:`);
+		console.error(`\n${over.length} client-JS budget problem(s):`);
 		for (const o of over) console.error(`  ${o}`);
 		console.error(
 			'\nStarlight ships a little progressive-enhancement JS by design; a framework\n' +
@@ -954,7 +1048,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB initial + ${DEFERRED_JS_BUDGET_BYTES / 1024} KiB deferred JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
 }
 
 await main();

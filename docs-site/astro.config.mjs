@@ -50,6 +50,9 @@ export default defineConfig({
 			// Decouples the <title> tag from the page heading and de-duplicates the
 			// homepage title. See the file for why both are needed.
 			routeMiddleware: './src/starlightRouteData.ts',
+			// Search loads its 94 KB UI on intent instead of on every page's idle
+			// callback. See the component.
+			components: { Search: './src/components/Search.astro' },
 			social: [
 				{ icon: 'github', label: 'GitHub', href: REPO },
 			],
