@@ -96,6 +96,7 @@ function homepageJsonLd(description: string) {
  */
 const SECTIONS: Record<string, string> = {
 	install: 'Install',
+	quickstart: 'Quickstart',
 	reference: 'CLI reference',
 	findings: 'Findings',
 	privacy: 'Privacy',

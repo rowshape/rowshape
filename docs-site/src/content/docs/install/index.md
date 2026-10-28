@@ -95,3 +95,8 @@ keyless signature at all.
 
 The binary is a single static executable with a deliberately small dependency
 set — half the reason rowshape is written in Go.
+
+## Next
+
+[Quickstart](/quickstart/): pull a fixture, validate a migration that fails on
+real data, fix it, and get a PASS.

@@ -23,6 +23,11 @@ import { SITE, REPO } from '../site';
 const SECTIONS: { dir: string; heading: string; note: string }[] = [
 	{ dir: 'install', heading: 'Install', note: 'Getting the binary.' },
 	{
+		dir: 'quickstart',
+		heading: 'Quickstart',
+		note: 'Install to first verdict: pull, validate a failing migration, fix it, PASS.',
+	},
+	{
 		dir: 'reference',
 		heading: 'CLI reference',
 		note: 'Every command and flag, generated from the binary itself.',

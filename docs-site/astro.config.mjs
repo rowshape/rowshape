@@ -87,6 +87,8 @@ export default defineConfig({
 			// is the shape it lands into.
 			sidebar: [
 				{ label: 'Install', items: [{ autogenerate: { directory: 'install' } }] },
+				// Install to first verdict, so it sits directly after Install.
+				{ label: 'Quickstart', items: [{ autogenerate: { directory: 'quickstart' } }] },
 				// Generated from the cobra tree by `go run ./tools/gencli`, with a
 				// staleness test, so the reference cannot drift from the binary.
 				{ label: 'CLI reference', items: [{ autogenerate: { directory: 'reference' } }] },
