@@ -78,6 +78,42 @@ tables:
 	}
 }
 
+// TestRSConstraintSeparateFilesNotFlagged: NOT VALID in one migration file and
+// VALIDATE in the next is the split as runners actually apply it — each file in
+// its own transaction, with no COMMIT in the text. It must not be flagged; in
+// ONE file with no COMMIT it still must be, since a runner wraps the file.
+func TestRSConstraintSeparateFilesNotFlagged(t *testing.T) {
+	f, err := fixture.Parse([]byte(`rowshape_fixture: "1"
+meta: {id: t, engine: {name: postgres, version: "16"}}
+tables:
+  public.orders:
+    rows: {value: 1000000, confidence: exact}
+    columns:
+      total_cents: {type: integer, nullable: false}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	add := "ALTER TABLE public.orders ADD CONSTRAINT c CHECK (total_cents > 0) NOT VALID"
+	validateStmt := "ALTER TABLE public.orders VALIDATE CONSTRAINT c"
+
+	twoFiles := &validate.Capture{Success: true, Statements: []validate.Statement{
+		{SQL: add, File: "001_add.sql"},
+		{SQL: validateStmt, File: "002_validate.sql"},
+	}}
+	if got := (rsConstraint{}).Analyze(f, twoFiles); len(got) != 0 {
+		t.Errorf("NOT VALID and VALIDATE in separate files must not be flagged, got %+v", got)
+	}
+
+	oneFile := &validate.Capture{Success: true, Statements: []validate.Statement{
+		{SQL: add, File: "001.sql"},
+		{SQL: validateStmt, File: "001.sql"},
+	}}
+	if got := (rsConstraint{}).Analyze(f, oneFile); len(got) != 1 || got[0].Code != "RS-CONSTRAINT-001" {
+		t.Errorf("NOT VALID and VALIDATE in one file must still be flagged, got %+v", got)
+	}
+}
+
 // TestRSConstraintCheckConflict: a CHECK whose predicate the profiled range
 // violates fires RS-CONSTRAINT-010 (error) with the range as evidence.
 func TestRSConstraintCheckConflict(t *testing.T) {

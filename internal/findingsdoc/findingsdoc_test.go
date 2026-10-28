@@ -20,9 +20,9 @@ func TestPageContainsCatalogFields(t *testing.T) {
 		"title: 'RS-LOCK-001 — a title'",
 		"description: " + yamlQuote(pageMetas["RS-LOCK-001"].Description), // tuned for search
 		"seoTitle: " + yamlQuote(pageMetas["RS-LOCK-001"].SEOTitle),
-		"`RS-LOCK`",                    // namespace
-		"one sentence. two sentence.",  // full summary in the body
-		"## Remediation",
+		"`RS-LOCK`",                   // namespace
+		"one sentence. two sentence.", // full summary in the body
+		"## How to fix",
 		"do the thing",
 		"[Fixture spec §9.1: Extrapolation is model-based, not linear](/spec/)",
 		"rowshape explain RS-LOCK-001",
@@ -34,6 +34,38 @@ func TestPageContainsCatalogFields(t *testing.T) {
 	// The internal plan is not published; a reader cannot follow it.
 	if strings.Contains(page, "PRD §") {
 		t.Errorf("page cites the unpublished plan:\n%s", page)
+	}
+}
+
+// TestEveryPageHasTheFixedStructure: every finding page carries the same
+// sections in the same order, so the fix is in the same place on all of them.
+func TestEveryPageHasTheFixedStructure(t *testing.T) {
+	sections := []string{
+		"## What it means\n", "## Why it matters\n", "## Example\n",
+		"```sql\n", "## How to fix\n", "## Related codes\n",
+	}
+	for code, e := range Catalog() {
+		page := Page(e)
+		at := 0
+		for _, s := range sections {
+			i := strings.Index(page[at:], s)
+			if i < 0 {
+				t.Errorf("%s: missing or out of order: %q", code, strings.TrimSpace(s))
+				break
+			}
+			at += i + len(s)
+		}
+		if !strings.Contains(page, e.Remediation) {
+			t.Errorf("%s: the catalog remediation must appear verbatim", code)
+		}
+		for _, rel := range pageGuides[code].Related {
+			if rel == code {
+				t.Errorf("%s lists itself as related", code)
+			}
+			if _, ok := findings.Explain(rel); !ok {
+				t.Errorf("%s lists unknown related code %s", code, rel)
+			}
+		}
 	}
 }
 
