@@ -1017,6 +1017,55 @@ async function checkCSP(pages) {
 	return problems;
 }
 
+/** How far ahead of the Expires date the build starts warning. */
+const SECURITY_TXT_WARN_DAYS = 30;
+
+/**
+ * /.well-known/security.txt (RFC 9116) must exist, name a Contact, and carry an
+ * Expires that has not passed and is under a year out (the RFC's own
+ * recommendation, so a stale file cannot claim to be current for long).
+ *
+ * Expiry inside 30 days is a WARNING, not a failure, deliberately: the date runs
+ * out on the calendar, not because of any change, so failing would block an
+ * unrelated docs fix with no warning at all. Thirty days of yellow output on
+ * every build is the notice; once the date has actually passed the file is
+ * telling researchers something false, and that fails.
+ */
+async function checkSecurityTxt(now = new Date()) {
+	const path = join(DIST, '.well-known', 'security.txt');
+	if (!existsSync(path)) return ['no dist/.well-known/security.txt — public/.well-known/security.txt was not copied'];
+	const fields = new Map();
+	for (const line of (await readFile(path, 'utf8')).split('\n')) {
+		const m = line.match(/^([A-Za-z-]+):\s*(.+?)\s*$/);
+		if (m) fields.set(m[1].toLowerCase(), [...(fields.get(m[1].toLowerCase()) ?? []), m[2]]);
+	}
+	const problems = [];
+	const contact = fields.get('contact') ?? [];
+	if (!contact.length) problems.push('security.txt has no Contact');
+	for (const c of contact) {
+		// RFC 9116 §2.5.3: a web URI must be https.
+		if (!/^(https:\/\/|mailto:|tel:)/.test(c)) problems.push(`security.txt Contact is not https:, mailto: or tel:: ${c}`);
+	}
+	const expires = fields.get('expires') ?? [];
+	if (expires.length !== 1) {
+		problems.push(`security.txt must have exactly one Expires, has ${expires.length}`);
+	} else {
+		const when = new Date(expires[0]);
+		const days = (when - now) / 86_400_000;
+		if (Number.isNaN(when.getTime())) problems.push(`security.txt Expires is not an RFC 3339 date: ${expires[0]}`);
+		else if (days <= 0) problems.push(`security.txt expired on ${expires[0]} — set a new Expires under a year out`);
+		else if (days > 366) problems.push(`security.txt Expires ${expires[0]} is more than a year out; RFC 9116 recommends less`);
+		else if (days < SECURITY_TXT_WARN_DAYS) {
+			console.warn(`WARNING: security.txt expires in ${Math.ceil(days)} day(s) (${expires[0]}); renew public/.well-known/security.txt\n`);
+		}
+	}
+	const canonical = fields.get('canonical') ?? [];
+	if (!canonical.includes('https://rowshape.com/.well-known/security.txt')) {
+		problems.push('security.txt Canonical is not https://rowshape.com/.well-known/security.txt');
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -1047,7 +1096,7 @@ async function main() {
 	const noindex = await checkNoindex(pages);
 	const critical = await checkCriticalPath(pages);
 	const selfLinks = await checkSelfLinks(pages);
-	const security = [...(await checkHeaders()), ...(await checkCSP(pages))];
+	const security = [...(await checkHeaders()), ...(await checkCSP(pages)), ...(await checkSecurityTxt())];
 
 	let failed = false;
 	if (security.length) {
@@ -1135,7 +1184,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, security headers and immutable caching in _headers, a CSP that allows every inline script, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, security headers and immutable caching in _headers, a CSP that allows every inline script, a current security.txt, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
 }
 
 await main();

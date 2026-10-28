@@ -1,0 +1,11 @@
+# RFC 9116. Derived from SECURITY.md, which is the policy; this file only tells
+# a researcher where to send a report.
+#
+# Expires must be renewed before it passes: an expired security.txt tells
+# researchers the contact is stale. scripts/check-build.mjs warns 30 days ahead
+# and fails the build once the date is past or more than a year out.
+Contact: https://github.com/rowshape/rowshape/security/advisories/new
+Expires: 2027-09-28T00:00:00.000Z
+Policy: https://github.com/rowshape/rowshape/blob/main/SECURITY.md
+Preferred-Languages: en
+Canonical: https://rowshape.com/.well-known/security.txt

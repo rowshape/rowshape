@@ -25,10 +25,13 @@ on:
   # workflow carries workflow_dispatch for the same reason.
   workflow_dispatch:
 
-# Never let two deploys of the same branch race.
+# Never let two runs of the same ref race. On a PR branch a new push makes the
+# running check moot, so cancel it. On main, never cancel: a cancelled deploy can
+# stop wrangler partway through an upload, and queueing keeps the order without
+# killing either run.
 concurrency:
   group: docs-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -51,6 +54,9 @@ jobs:
           # scripts/gen-lastmod.mjs refuses to run against a shallow clone
           # rather than emitting that, so without this the build fails loudly.
           fetch-depth: 0
+          # The token is not left in .git/config for npm ci's install scripts,
+          # or anything else in the build, to read. Nothing here pushes.
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -65,46 +71,66 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
       - name: build
         run: npm run build
-      - name: check (links + client-JS budget)
+      # `build` also runs scripts/gen-csp.mjs, which writes the CSP into
+      # dist/_headers; check re-derives it and fails on a missing hash.
+      - name: check (links, budgets, headers, CSP, security.txt)
         run: npm run check
       - name: upload site
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: docs-site
           path: docs-site/dist
           retention-days: 7
+          # upload-artifact skips dot-files by default since v4.4, which would
+          # silently drop .well-known/security.txt from what gets deployed.
+          include-hidden-files: true
+          if-no-files-found: error
 
   deploy:
     name: deploy to Cloudflare Pages
     needs: build
     # Only on main, and never from a fork PR — a fork must not reach the account
-    # token.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # token. workflow_dispatch is included because that trigger exists to force
+    # a deployment (see `on:`); with `push` alone a manual run built and checked
+    # but never deployed.
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       deployments: write
+    # Ships the artifact the build job uploaded -- the exact bytes that passed
+    # `npm run check` -- instead of checking out and building again. A rebuild
+    # here would deploy output nothing had checked (a dependency could resolve
+    # differently, a generator could run against a different clock), and it
+    # would run npm install scripts on the one runner that holds the Cloudflare
+    # token. So: no checkout, no npm ci, and no fetch-depth: 0 (only the build
+    # job needs history, for gen-lastmod).
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: download the checked site
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          # Full history: the sitemap's <lastmod> and each page's dateModified
-          # are the git commit date of that page's source. The default shallow
-          # checkout leaves one commit, which would give every page the same
-          # date and tell crawlers the whole site changed on every deploy.
-          # scripts/gen-lastmod.mjs refuses to run against a shallow clone
-          # rather than emitting that, so without this the build fails loudly.
-          fetch-depth: 0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: docs-site/package-lock.json
-      - run: npm ci
-      - run: npm run build
+          name: docs-site
+          path: docs-site/dist
+      # Cheap insurance that the artifact is the whole site: _headers carries
+      # the security headers and CSP, and the dot-directory is the one an
+      # artifact upload drops by default.
+      - name: artifact sanity
+        run: |
+          test -f dist/index.html
+          grep -q '^  Content-Security-Policy: ' dist/_headers
+          test -f dist/.well-known/security.txt
       - name: publish
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Pinned: unpinned, the action installs whatever wrangler is newest at
+          # deploy time -- an unreviewed dependency on the token-holding runner.
+          # Bump deliberately.
+          wranglerVersion: '4.154.0'
           workingDirectory: docs-site
-          command: pages deploy dist --project-name=rowshape-docs
+          # With no checkout, wrangler cannot read the branch and commit from
+          # .git, so both are passed; --branch=main is what makes this the
+          # production deployment. github.sha is a hex digest, not user-supplied
+          # text, so interpolating it into the command is safe.
+          command: pages deploy dist --project-name=rowshape-docs --branch=main --commit-hash=${{ github.sha }}
