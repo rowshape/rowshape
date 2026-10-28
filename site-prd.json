@@ -1,0 +1,147 @@
+{
+  "$schema": "rowshape/site-loop-prd/v1",
+  "version": "0.1.0",
+  "title": "rowshape.com performance, security, UI/UX backlog",
+  "surface": "docs-site/ (Astro 7 + Starlight 0.42, deployed to Cloudflare Pages at https://rowshape.com)",
+  "how_this_works": "Follows seo-prd.json (SEO is done there and not repeated here). One iteration fixes one story end to end: change, `npm run verify` (build + scripts/check-build.mjs), commit. Where a story can be guarded, the guard goes into check-build.mjs so it cannot regress. Every story records what was VERIFIED, not what was intended. Local builds need Node >=22.23.4 (Astro 7.4 engines).",
+  "audit_baseline": {
+    "date": "2026-10-28",
+    "method": "three parallel read-only audits of the built dist/ (49 pages): security + delivery pipeline (npm audit, dist inline-script census, workflow review); performance + accessibility (Playwright + axe-core 4.10.2 on all 49 pages at 375px in both themes, focus walk, forced-colors, reduced-motion); UI/UX + content (screenshots of homepage desktop/mobile light/dark, a finding page, install, 404, catalog)",
+    "already_good": [
+      "axe: zero violations on homepage, findings, reference, 404 in both themes at 1280px",
+      "no horizontal page scroll at 375px on any of the 49 pages",
+      "skip link is the first tab stop; one <main> plus header/nav/footer landmarks; visible focus on every tab stop",
+      "only common.css is render-blocking (11 KB gzip); no web fonts; no third-party origins",
+      "workflow actions SHA-pinned, least-privilege permissions, deploy gated off fork PRs",
+      "no target=_blank links, so no missing rel=noopener"
+    ],
+    "gaps_found": [
+      "npm audit --omit=dev: 13 vulnerabilities (1 critical: Astro 7.1 AVIF RCE; 10 high incl. sharp/libvips, Astro JSX XSS). Pending dependabot branches would not have fixed them",
+      "no public/_headers: no HSTS, nosniff, Referrer-Policy, Permissions-Policy, framing protection, COOP, and /_astro/* hashed assets not long-cached",
+      "no Content-Security-Policy; Starlight's inline scripts are byte-identical across pages so a hash-based CSP is feasible",
+      "no /.well-known/security.txt; deploy job rebuilds instead of shipping the checked artifact, wrangler unpinned, no protected environment",
+      "check-build's 32 KiB JS budget counts only <script src>; real per-page JS is ~100 KB because the search UI (94 KB) loads on idle on every page",
+      "axe scrollable-region-focusable on 7 tables at 375px; unnamed code-block regions (landmark-unique); empty <th> on /privacy/; copy-button icon vanishes under forced-colors",
+      "default Starlight look: stock accent, default star favicon, no favicon.ico (browsers get the 14 KB 404)",
+      "homepage has no example SQL or verdict output; no quickstart page; install page doesn't say npm/Homebrew are pre-release and links the Action guide to /agent/",
+      "29 'PRD §' and several INV-* references on public pages that readers cannot open",
+      "finding pages are a dense Remediation paragraph with no example of failing/fixed SQL; sidebar lists 28 long finding titles; GitHub Action buried under CLI reference",
+      "no FAQ / comparison with squawk, strong_migrations; exit codes and CI usage only in README"
+    ]
+  },
+  "stories": [
+    {
+      "id": "SITE-1",
+      "area": "security",
+      "title": "Upgrade the vulnerable build stack and gate CI on npm audit",
+      "status": "done",
+      "iteration": 1,
+      "verified": [
+        "astro 7.1.0 -> 7.4.2, @astrojs/starlight 0.41.3 -> 0.42.7, sharp 0.34.5 -> 0.35.5, @astrojs/markdown-remark -> 7.3.4, @astrojs/sitemap -> 3.7.4; `npm audit --omit=dev` went from 13 vulnerabilities (1 critical, 10 high) to 0",
+        "Astro 7.4.2 requires Node >=22.23.4; recorded as package.json engines. CI's `node-version: 22` resolves to the latest 22.x, which satisfies it",
+        "docs-deploy.yml build job now runs `npm audit --omit=dev --audit-level=high` after npm ci",
+        "`npm run verify` passes on the new stack: 49 pages, every existing check-build assertion green"
+      ]
+    },
+    {
+      "id": "SITE-2",
+      "area": "security+performance",
+      "title": "public/_headers: baseline security headers and immutable caching for hashed assets",
+      "status": "open",
+      "plan": "HSTS, nosniff, Referrer-Policy, Permissions-Policy, X-Frame-Options DENY, COOP on /*; /_astro/* immutable 1y; /pagefind/* short max-age. check-build asserts each header and that every dist/_astro file name carries a hash."
+    },
+    {
+      "id": "SITE-3",
+      "area": "security",
+      "title": "Hash-based Content-Security-Policy generated from dist after build",
+      "status": "open",
+      "plan": "scripts/gen-csp.mjs hashes every executable inline script in dist/**/*.html and writes the CSP into dist/_headers (header, not <meta>, so frame-ancestors works). Pagefind needs wasm-unsafe-eval + worker-src self. Verify zero CSP violations in Playwright across all pages and an opened search before enforcing; check-build fails if any inline script hash is missing."
+    },
+    {
+      "id": "SITE-4",
+      "area": "security",
+      "title": "security.txt and deploy-job hardening",
+      "status": "open",
+      "plan": "public/.well-known/security.txt from SECURITY.md (Contact, Expires <1y, Policy, Canonical) with a check-build expiry guard. Workflow: persist-credentials false, pin wranglerVersion, deploy ships the checked build artifact instead of rebuilding, don't cancel in-progress deploys on main."
+    },
+    {
+      "id": "SITE-5",
+      "area": "performance",
+      "title": "Load the search UI on intent, and make the JS budget count what pages really load",
+      "status": "open",
+      "plan": "Override Starlight Search so the 94 KB ui-core chunk loads on focus/hover/click/Ctrl+K instead of on idle. check-build follows dynamic import() from loaded chunks and reports initial vs deferred JS."
+    },
+    {
+      "id": "SITE-6",
+      "area": "accessibility",
+      "title": "Keyboard-scrollable tables, named code regions, no empty table headers",
+      "status": "open",
+      "plan": "rehype plugin wraps tables in a focusable labelled region; code blocks wrap on narrow screens so they stop becoming unnamed scroll regions; fix the empty <th> on /privacy/. check-build fails on bare tables and empty <th>."
+    },
+    {
+      "id": "SITE-7",
+      "area": "ui+accessibility",
+      "title": "Brand theme, real favicon set, forced-colors fixes, lighter social card",
+      "status": "open",
+      "plan": "customCss with brand accent (#2E4A7D family) in light and dark with AA contrast; logo + favicon.svg/.ico/apple-touch-icon; forced-colors rule for the copy button; og.png palette-encoded under 40 KB."
+    },
+    {
+      "id": "SITE-8",
+      "area": "ux",
+      "title": "Homepage shows the product: migration in, verdict out, above the fold",
+      "status": "open",
+      "plan": "Under the hero: failing migration SQL beside the `rowshape validate` output; how-it-works Steps (pull, hydrate, validate); Tabs for CLI / GitHub Action / MCP. Move 'The problem' below."
+    },
+    {
+      "id": "SITE-9",
+      "area": "ux+content",
+      "title": "Quickstart: install to first verdict",
+      "status": "open",
+      "plan": "New /quickstart/ built from demo/ and the README quickstart; every command checked against the CLI. Sidebar after Install, second hero action, 'Next' link from install."
+    },
+    {
+      "id": "SITE-10",
+      "area": "ux+content",
+      "title": "Install page: pre-release truth, platform tabs, correct links",
+      "status": "open",
+      "plan": "Caution aside for channels that land with the first tag; Tabs per platform; fix the 'GitHub Action guide' link that points to /agent/ and the off-site docs/action.md link; supply-chain detail collapsible."
+    },
+    {
+      "id": "SITE-11",
+      "area": "content",
+      "title": "Remove internal planning references (PRD §, INV-*) from public pages",
+      "status": "open",
+      "plan": "Rewrite or drop them at the source (content, generator inputs, registry summaries); check-build fails on 'PRD §' or INV- in dist."
+    },
+    {
+      "id": "SITE-12",
+      "area": "ux+content",
+      "title": "Finding pages get a fixed structure with a failing and a fixed example",
+      "status": "open",
+      "plan": "Extend the findings registry with example/fixed SQL; generator emits What it means / Example / How to fix / Related. Spec references become links. Staleness tests and `rowshape explain` stay consistent."
+    },
+    {
+      "id": "SITE-13",
+      "area": "ux",
+      "title": "Sidebar and navigation for the CI and integration reader",
+      "status": "open",
+      "plan": "Integrations group (GitHub Action, MCP); findings grouped by namespace, collapsed, labelled by code; useful prev/next on findings; 404 points at search and explains the RS-XXX-000 shape."
+    },
+    {
+      "id": "SITE-14",
+      "area": "content",
+      "title": "FAQ with comparison, and a 'rowshape in CI' page",
+      "status": "open",
+      "plan": "FAQ answering how rowshape differs from static linters (squawk, strong_migrations) and pgroll; CI page with exit codes and warn-as-fail. Included in llms.txt and the sitemap."
+    },
+    {
+      "id": "SITE-15",
+      "area": "rollup",
+      "title": "Rollup: re-run all three audits against the merged site and close or re-open every story",
+      "status": "open"
+    }
+  ],
+  "not_doing": [
+    "Deleting the two unused Gemini_Generated_Image_*.png files at the repo root (2.8 MB, unreferenced): they are the owner's files and may be intended as brand assets; raised with the owner instead"
+  ]
+}

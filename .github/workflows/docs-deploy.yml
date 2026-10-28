@@ -57,6 +57,12 @@ jobs:
           cache: npm
           cache-dependency-path: docs-site/package-lock.json
       - run: npm ci
+      # The build runs on a runner, and the deploy job's runner holds the
+      # Cloudflare token: a known-vulnerable build dependency (Astro 7.1 shipped
+      # with a critical image-pipeline RCE) is a supply-chain hole even though
+      # the output is static. Fail on high or critical, not on moderates.
+      - name: audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
       - name: build
         run: npm run build
       - name: check (links + client-JS budget)
