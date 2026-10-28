@@ -89,6 +89,9 @@ export default defineConfig({
 				{ label: 'Install', items: [{ autogenerate: { directory: 'install' } }] },
 				// Install to first verdict, so it sits directly after Install.
 				{ label: 'Quickstart', items: [{ autogenerate: { directory: 'quickstart' } }] },
+				// Task-shaped pages (CI) that cut across the reference, rather than
+				// describing one command.
+				{ label: 'Guides', items: [{ autogenerate: { directory: 'guides' } }] },
 				// Generated from the cobra tree by `go run ./tools/gencli`, with a
 				// staleness test, so the reference cannot drift from the binary.
 				{ label: 'CLI reference', items: [{ autogenerate: { directory: 'reference' } }] },
@@ -100,6 +103,7 @@ export default defineConfig({
 				{ label: 'Fidelity', items: [{ autogenerate: { directory: 'fidelity' } }] },
 				{ label: 'Agents & MCP', items: [{ autogenerate: { directory: 'agent' } }] },
 				{ label: 'Fixture spec', items: [{ autogenerate: { directory: 'spec' } }] },
+				{ label: 'FAQ', items: [{ autogenerate: { directory: 'faq' } }] },
 			],
 		}),
 	],

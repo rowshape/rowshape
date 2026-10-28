@@ -58,9 +58,9 @@ tool error [bad_usage]: validate: refusing to run against the fixture's source h
 ## 3. Pull a fixture
 
 Point `pull` at the database whose shape you care about — production, or a
-staging copy with production-sized data. It reads catalog views and planner
-statistics only, never `SELECT *` on your tables, and it refuses to run as a
-superuser unless you pass `--i-know`. Use a read-only role, for example (on
+staging copy with production-sized data. It reads the catalog and runs bounded
+profiling aggregates inside a read-only transaction — never `SELECT *` on your
+tables — and it refuses to run as a superuser unless you pass `--i-know`. Use a read-only role, for example (on
 Postgres 14 and later):
 
 ```sql
