@@ -1,0 +1,212 @@
+---
+title: Install
+description: 'Install the rowshape CLI — a single static binary with no runtime — via Homebrew, go install, npx, a direct download, or Docker in CI.'
+sidebar:
+  order: 1
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+{/*
+  .mdx rather than .md only so the platform tabs can be components; the URL is
+  still /install/. Every name below is checked against the files that produce
+  it: archive names against .goreleaser.yaml's archives.name_template, the npm
+  state against npm/package.json, the image against dockers_v2. If one of those
+  changes, this page changes with it.
+*/}
+
+rowshape is a single static Go binary. There is no runtime to install and no
+services to run. Every channel delivers the same binary.
+
+:::caution[Before the first tagged release]
+rowshape has not cut its first release yet, and most channels are built from
+one. Until that tag exists:
+
+- **`go install` works today** — it builds from source.
+- **Homebrew**, the **Docker image**, the **GitHub Releases downloads** and the
+  **GitHub Action**'s `@v1` tag are all produced by the release, so they land
+  with it.
+- **npm** holds the name with a placeholder `0.0.0`; `npx rowshape` starts
+  working at that same tag.
+:::
+
+<Tabs syncKey="os">
+<TabItem label="macOS">
+
+**Homebrew**
+
+```sh
+brew install rowshape/tap/rowshape
+rowshape --help
+```
+
+**go install**
+
+```sh
+go install github.com/rowshape/rowshape@latest
+```
+
+Installs into `$(go env GOPATH)/bin`; make sure that is on your `PATH`.
+
+**npm / npx**
+
+```sh
+npx rowshape --help
+# or add it to a project:
+npm install --save-dev rowshape
+```
+
+**Direct download** — `darwin_arm64` for Apple silicon, `darwin_amd64` for Intel:
+
+```sh
+VERSION=1.2.3   # the release you want, without the leading v
+curl -sSLO "https://github.com/rowshape/rowshape/releases/download/v${VERSION}/rowshape_${VERSION}_darwin_arm64.tar.gz"
+tar -xzf "rowshape_${VERSION}_darwin_arm64.tar.gz"
+./rowshape --help
+```
+
+</TabItem>
+<TabItem label="Linux">
+
+**Homebrew**
+
+```sh
+brew install rowshape/tap/rowshape
+```
+
+**go install**
+
+```sh
+go install github.com/rowshape/rowshape@latest
+```
+
+Installs into `$(go env GOPATH)/bin`; make sure that is on your `PATH`.
+
+**npm / npx**
+
+```sh
+npx rowshape --help
+```
+
+**Direct download** — `linux_amd64` or `linux_arm64`:
+
+```sh
+VERSION=1.2.3   # the release you want, without the leading v
+curl -sSLO "https://github.com/rowshape/rowshape/releases/download/v${VERSION}/rowshape_${VERSION}_linux_amd64.tar.gz"
+tar -xzf "rowshape_${VERSION}_linux_amd64.tar.gz"
+sudo install rowshape /usr/local/bin/
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+**go install**
+
+```powershell
+go install github.com/rowshape/rowshape@latest
+```
+
+**npm / npx**
+
+```powershell
+npx rowshape --help
+```
+
+**Direct download** — Windows archives are `.zip`, `windows_amd64` or
+`windows_arm64`:
+
+```powershell
+$Version = "1.2.3"   # the release you want, without the leading v
+Invoke-WebRequest -OutFile rowshape.zip `
+  "https://github.com/rowshape/rowshape/releases/download/v$Version/rowshape_${Version}_windows_amd64.zip"
+Expand-Archive rowshape.zip -DestinationPath rowshape
+.\rowshape\rowshape.exe --help
+```
+
+</TabItem>
+<TabItem label="CI">
+
+**GitHub Action** — installs the release binary, verifies it, runs `validate`
+and annotates the pull request:
+
+```yaml
+- uses: rowshape/rowshape@v1
+  with:
+    fixture: rowshape.yaml
+    migrations: migrations/
+    ephemeral: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+```
+
+See the [GitHub Action reference](/reference/github-action/) for the full
+workflow, inputs and exit-code gating.
+
+**Docker** — a `FROM scratch` image for `linux/amd64` and `linux/arm64`, tagged
+with each version and `latest`:
+
+```sh
+docker run --rm ghcr.io/rowshape/rowshape:latest --help
+```
+
+</TabItem>
+</Tabs>
+
+## Release archives
+
+Each release publishes six archives, named by `.goreleaser.yaml` as
+`rowshape_<version>_<os>_<arch>` — the version without its leading `v`, raw
+`GOOS` and `GOARCH`:
+
+```text title="Release assets for one version"
+rowshape_<version>_darwin_amd64.tar.gz
+rowshape_<version>_darwin_arm64.tar.gz
+rowshape_<version>_linux_amd64.tar.gz
+rowshape_<version>_linux_arm64.tar.gz
+rowshape_<version>_windows_amd64.zip
+rowshape_<version>_windows_arm64.zip
+```
+
+Each archive holds the `rowshape` binary, `LICENSE` and `README.md`. Alongside
+them: `checksums.txt`, its cosign signature and certificate, and one SPDX SBOM
+per archive.
+
+## Supply chain
+
+**You do not have to verify by hand.** The GitHub Action and the npm installer
+both check the archive against `checksums.txt` and refuse to run a binary that
+does not match; the Action can also require the cosign signature — see its
+[supply-chain verification](/reference/github-action/#supply-chain-verification)
+inputs, `verify` and `verify-signature`.
+
+<details>
+<summary>Verify a manual download yourself</summary>
+
+Check the signature over `checksums.txt` first — it proves who produced the file
+— then check your archive against it:
+
+```sh
+# 1. The signature is keyless, so the certificate identity must be pinned.
+cosign verify-blob \
+  --certificate checksums.txt.pem \
+  --signature   checksums.txt.sig \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --certificate-identity-regexp "^https://github.com/rowshape/rowshape/\.github/workflows/.+@refs/tags/" \
+  checksums.txt
+
+# 2. Now that checksums.txt is trusted, check the archive against it.
+sha256sum --ignore-missing -c checksums.txt
+```
+
+Order matters: verifying the archive against an *unverified* `checksums.txt`
+proves only that the two files agree, which an attacker who replaced both can
+arrange. The identity flags are required — without them cosign will not verify a
+keyless signature at all.
+
+</details>
+
+The binary is a single static executable with a deliberately small dependency
+set — half the reason rowshape is written in Go.
+
+## Next
+
+[Quickstart](/quickstart/): pull a fixture, validate a migration that fails on
+real data, fix it, and get a PASS.
