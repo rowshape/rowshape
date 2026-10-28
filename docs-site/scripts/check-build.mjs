@@ -842,6 +842,128 @@ async function checkCriticalPath(pages) {
 	return [...problems, ...over];
 }
 
+// ---------------------------------------------------------------------------
+// Security: response headers, CSP, security.txt.
+//
+// A header file is invisible in review — nothing renders it, a typo in it fails
+// silently, and Cloudflare only tells you by not sending the header. So the
+// guard reads dist/_headers the way Cloudflare does and asserts the result.
+
+/** Cloudflare Pages' documented limits on _headers. */
+const HEADERS_MAX_RULES = 100;
+const HEADERS_MAX_LINE = 2000;
+
+/**
+ * Parse a Cloudflare _headers file: an unindented line opens a rule for a path,
+ * indented `Name: value` lines belong to it, `! Name` detaches. Returns rules in
+ * file order with header names lowercased (HTTP header names are
+ * case-insensitive, and so is Cloudflare's matching of them).
+ */
+function parseHeadersFile(text) {
+	const rules = [];
+	let current = null;
+	for (const [i, raw] of text.split('\n').entries()) {
+		const line = raw.replace(/\r$/, '');
+		if (!line.trim() || line.trim().startsWith('#')) continue;
+		if (!/^\s/.test(line)) {
+			current = { path: line.trim(), headers: new Map(), detach: [], line: i + 1 };
+			rules.push(current);
+			continue;
+		}
+		if (!current) throw new Error(`_headers line ${i + 1}: header before any path`);
+		const body = line.trim();
+		if (body.startsWith('!')) {
+			current.detach.push(body.slice(1).trim().toLowerCase());
+			continue;
+		}
+		const colon = body.indexOf(':');
+		if (colon < 1) throw new Error(`_headers line ${i + 1}: not "Name: value": ${body}`);
+		const name = body.slice(0, colon).trim().toLowerCase();
+		const value = body.slice(colon + 1).trim();
+		current.headers.set(name, [...(current.headers.get(name) ?? []), value]);
+	}
+	return rules;
+}
+
+/**
+ * What /* must send. Exact values, not "present": `max-age=0` is a present HSTS
+ * header too, and the value is the whole point.
+ */
+const REQUIRED_SITE_HEADERS = {
+	'strict-transport-security': 'max-age=31536000; includeSubDomains',
+	'x-content-type-options': 'nosniff',
+	'referrer-policy': 'strict-origin-when-cross-origin',
+	'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+	'x-frame-options': 'DENY',
+	'cross-origin-opener-policy': 'same-origin',
+};
+
+/**
+ * A content-hashed asset name. Vite: `name.XXXXXXXX.ext`, 8 base64url chars.
+ * Expressive Code: `ec.xxxxx.ext`, 5 base36 chars of a djb2a hash of the content
+ * (astro-expressive-code's getHashedRouteWithContent). Both are content hashes,
+ * which is what makes `immutable` safe. A loose "has a dotted segment" test would
+ * pass Vite's `[name].js` output, whose names are long and underscore-heavy.
+ */
+const HASHED_ASSET = /(?:\.[A-Za-z0-9_-]{8}|^ec\.[0-9a-z]{5})\.[a-z0-9]+$/;
+
+async function checkHeaders() {
+	const path = join(DIST, '_headers');
+	if (!existsSync(path)) return ['no _headers in dist/ — public/_headers was not copied'];
+	const text = await readFile(path, 'utf8');
+	const problems = [];
+
+	for (const [i, line] of text.split('\n').entries()) {
+		if (line.length > HEADERS_MAX_LINE) {
+			problems.push(`_headers line ${i + 1} is ${line.length} chars; Cloudflare drops lines over ${HEADERS_MAX_LINE}`);
+		}
+	}
+	let rules;
+	try {
+		rules = parseHeadersFile(text);
+	} catch (e) {
+		return [...problems, e.message];
+	}
+	if (rules.length > HEADERS_MAX_RULES) {
+		problems.push(`_headers has ${rules.length} rules; Cloudflare ignores everything past ${HEADERS_MAX_RULES}`);
+	}
+
+	const site = rules.find((r) => r.path === '/*');
+	if (!site) {
+		problems.push('_headers has no /* rule — no page gets the security headers');
+	} else {
+		for (const [name, want] of Object.entries(REQUIRED_SITE_HEADERS)) {
+			const got = site.headers.get(name);
+			if (!got) problems.push(`_headers /* does not set ${name}`);
+			else if (got.length > 1 || got[0] !== want) problems.push(`_headers /* ${name} is "${got.join(', ')}", want "${want}"`);
+		}
+		// Cloudflare JOINS a header set by two matching rules. Cache-Control on /*
+		// would be glued onto /_astro/*'s and the result would no longer say
+		// `immutable` cleanly — so the broad rule must not set it at all.
+		if (site.headers.has('cache-control')) problems.push('_headers /* sets Cache-Control, which every narrower rule would inherit joined to its own');
+	}
+
+	const astro = rules.find((r) => r.path === '/_astro/*');
+	const cc = astro?.headers.get('cache-control')?.join(', ') ?? '';
+	if (!/\bmax-age=31536000\b/.test(cc) || !/\bimmutable\b/.test(cc)) {
+		problems.push(`_headers /_astro/* Cache-Control is "${cc}", want max-age=31536000 and immutable`);
+	}
+
+	// `immutable` on a file whose name does not change when its content does
+	// means visitors keep the old file for a year. Every file the rule covers
+	// must be content-addressed.
+	const astroDir = join(DIST, '_astro');
+	if (existsSync(astroDir)) {
+		for (const file of await walk(astroDir, () => true)) {
+			const name = file.slice(astroDir.length + 1);
+			if (!HASHED_ASSET.test(name.split('/').pop())) {
+				problems.push(`dist/_astro/${name} has no content hash in its name, but /_astro/* is served immutable`);
+			}
+		}
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -872,8 +994,14 @@ async function main() {
 	const noindex = await checkNoindex(pages);
 	const critical = await checkCriticalPath(pages);
 	const selfLinks = await checkSelfLinks(pages);
+	const security = [...(await checkHeaders())];
 
 	let failed = false;
+	if (security.length) {
+		failed = true;
+		console.error(`${security.length} security-header problem(s):`);
+		for (const s of security) console.error(`  ${s}`);
+	}
 	if (critical.length) {
 		failed = true;
 		console.error(`${critical.length} critical-path problem(s):`);
@@ -954,7 +1082,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, security headers and immutable caching in _headers, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
 }
 
 await main();
