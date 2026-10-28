@@ -55,6 +55,9 @@ func TestEveryPageHasTheFixedStructure(t *testing.T) {
 			}
 			at += i + len(s)
 		}
+		if !strings.Contains(page, "sidebar:\n  label: '"+code+"'\n") {
+			t.Errorf("%s: the sidebar label must be the bare code", code)
+		}
 		if !strings.Contains(page, e.Remediation) {
 			t.Errorf("%s: the catalog remediation must appear verbatim", code)
 		}

@@ -2,6 +2,8 @@
 title: 'RS-LOCK-010 — The migration takes ACCESS EXCLUSIVE without setting lock_timeout'
 description: 'Without a lock_timeout, a DDL statement that cannot take its lock waits — and every new query on that table queues behind it while it does.'
 seoTitle: 'RS-LOCK-010: ACCESS EXCLUSIVE without a lock_timeout'
+sidebar:
+  label: 'RS-LOCK-010'
 ---
 
 **Namespace:** `RS-LOCK` · **Code:** `RS-LOCK-010`

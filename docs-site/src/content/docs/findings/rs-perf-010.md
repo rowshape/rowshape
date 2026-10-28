@@ -2,6 +2,8 @@
 title: 'RS-PERF-010 — A qualified UPDATE/DELETE on a large table rewrites many rows in one statement'
 description: 'A qualified UPDATE or DELETE that touches tens of millions of rows in one statement: row locks held throughout, bloat, replication lag.'
 seoTitle: 'RS-PERF-010: large single-statement UPDATE or DELETE'
+sidebar:
+  label: 'RS-PERF-010'
 ---
 
 **Namespace:** `RS-PERF` · **Code:** `RS-PERF-010`

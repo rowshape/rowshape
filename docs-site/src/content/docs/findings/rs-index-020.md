@@ -2,6 +2,8 @@
 title: 'RS-INDEX-020 — Non-concurrent REINDEX rebuilds under lock'
 description: 'A non-concurrent REINDEX rewrites the whole index while holding a lock that blocks writes.'
 seoTitle: 'RS-INDEX-020: non-concurrent REINDEX rebuilds under lock'
+sidebar:
+  label: 'RS-INDEX-020'
 ---
 
 **Namespace:** `RS-INDEX` · **Code:** `RS-INDEX-020`

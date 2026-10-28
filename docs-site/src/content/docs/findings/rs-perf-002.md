@@ -2,6 +2,8 @@
 title: 'RS-PERF-002 — Unqualified UPDATE/DELETE touches every row'
 description: 'An UPDATE or DELETE with no WHERE clause rewrites or removes every row of a large table — a slow, lock-holding, bloat-inducing full scan.'
 seoTitle: 'RS-PERF-002: unqualified UPDATE or DELETE hits every row'
+sidebar:
+  label: 'RS-PERF-002'
 ---
 
 **Namespace:** `RS-PERF` · **Code:** `RS-PERF-002`

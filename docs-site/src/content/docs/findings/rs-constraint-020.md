@@ -2,6 +2,8 @@
 title: 'RS-CONSTRAINT-020 — ADD CONSTRAINT without NOT VALID scans the whole table under ACCESS EXCLUSIVE'
 description: 'ADD CONSTRAINT without NOT VALID validates every existing row before the statement returns, holding ACCESS EXCLUSIVE for the whole scan.'
 seoTitle: 'RS-CONSTRAINT-020: ADD CONSTRAINT without NOT VALID'
+sidebar:
+  label: 'RS-CONSTRAINT-020'
 ---
 
 **Namespace:** `RS-CONSTRAINT` · **Code:** `RS-CONSTRAINT-020`

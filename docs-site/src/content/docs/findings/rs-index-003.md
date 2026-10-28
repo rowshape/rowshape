@@ -2,6 +2,8 @@
 title: 'RS-INDEX-003 — DROP INDEX without CONCURRENTLY takes ACCESS EXCLUSIVE on the table'
 description: 'A non-concurrent DROP INDEX takes ACCESS EXCLUSIVE on the table, not just the index, so every read and write on it queues behind you.'
 seoTitle: 'RS-INDEX-003: DROP INDEX without CONCURRENTLY locks'
+sidebar:
+  label: 'RS-INDEX-003'
 ---
 
 **Namespace:** `RS-INDEX` · **Code:** `RS-INDEX-003`

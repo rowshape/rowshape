@@ -2,6 +2,8 @@
 title: 'RS-TX-001 — This statement cannot run inside a transaction block'
 description: 'Postgres refuses some statements inside a transaction block with SQLSTATE 25001: CREATE INDEX CONCURRENTLY, VACUUM, ALTER SYSTEM and more.'
 seoTitle: 'RS-TX-001: statement cannot run in a transaction block'
+sidebar:
+  label: 'RS-TX-001'
 ---
 
 **Namespace:** `RS-TX` · **Code:** `RS-TX-001`

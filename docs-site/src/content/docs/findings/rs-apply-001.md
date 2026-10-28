@@ -2,6 +2,8 @@
 title: 'RS-APPLY-001 — Migration did not apply'
 description: 'A statement in the migration was rejected by the database, so nothing downstream was evaluated.'
 seoTitle: 'RS-APPLY-001: the migration did not apply'
+sidebar:
+  label: 'RS-APPLY-001'
 ---
 
 **Namespace:** `RS-APPLY` · **Code:** `RS-APPLY-001`

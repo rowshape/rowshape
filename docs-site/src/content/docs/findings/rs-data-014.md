@@ -2,6 +2,8 @@
 title: 'RS-DATA-014 — ADD UNIQUE without proven uniqueness'
 description: 'ADD CONSTRAINT UNIQUE can only succeed if the column is actually unique.'
 seoTitle: 'RS-DATA-014: ADD UNIQUE without proven uniqueness'
+sidebar:
+  label: 'RS-DATA-014'
 ---
 
 **Namespace:** `RS-DATA` · **Code:** `RS-DATA-014`

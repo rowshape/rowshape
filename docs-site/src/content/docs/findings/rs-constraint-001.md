@@ -2,6 +2,8 @@
 title: 'RS-CONSTRAINT-001 — NOT VALID constraint validated in the same transaction'
 description: 'Adding a constraint NOT VALID and validating it in the same transaction still runs the full scan under that transaction''s locks.'
 seoTitle: 'RS-CONSTRAINT-001: NOT VALID validated in the same tx'
+sidebar:
+  label: 'RS-CONSTRAINT-001'
 ---
 
 **Namespace:** `RS-CONSTRAINT` · **Code:** `RS-CONSTRAINT-001`

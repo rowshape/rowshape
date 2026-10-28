@@ -2,6 +2,8 @@
 title: 'RS-INDEX-010 — CREATE UNIQUE INDEX without proven uniqueness'
 description: 'A unique index only builds if the indexed set really is unique, and rowshape never infers uniqueness from a sample — unproven cannot be a PASS.'
 seoTitle: 'RS-INDEX-010: CREATE UNIQUE INDEX, uniqueness unproven'
+sidebar:
+  label: 'RS-INDEX-010'
 ---
 
 **Namespace:** `RS-INDEX` · **Code:** `RS-INDEX-010`

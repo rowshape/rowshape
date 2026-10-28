@@ -2,6 +2,8 @@
 title: 'RS-REVERSE-002 — DROP TABLE loses every row irreversibly'
 description: 'Dropping a table permanently removes every row. A down-migration can recreate the table structure, but not the data it contained.'
 seoTitle: 'RS-REVERSE-002: DROP TABLE loses every row irreversibly'
+sidebar:
+  label: 'RS-REVERSE-002'
 ---
 
 **Namespace:** `RS-REVERSE` · **Code:** `RS-REVERSE-002`

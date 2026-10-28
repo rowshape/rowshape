@@ -2,6 +2,8 @@
 title: 'RS-REVERSE-003 — Narrowing a column type can truncate data irreversibly'
 description: 'Narrowing a column''s type — a wider integer to a smaller one, or a fractional number to an integer — can truncate or round values.'
 seoTitle: 'RS-REVERSE-003: narrowing a column type truncates data'
+sidebar:
+  label: 'RS-REVERSE-003'
 ---
 
 **Namespace:** `RS-REVERSE` · **Code:** `RS-REVERSE-003`

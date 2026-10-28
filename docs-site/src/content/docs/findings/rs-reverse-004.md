@@ -2,6 +2,8 @@
 title: 'RS-REVERSE-004 — TRUNCATE removes every row irreversibly and locks the table'
 description: 'TRUNCATE deletes every row in the table and cannot be rolled back once committed.'
 seoTitle: 'RS-REVERSE-004: TRUNCATE is irreversible and locks'
+sidebar:
+  label: 'RS-REVERSE-004'
 ---
 
 **Namespace:** `RS-REVERSE` · **Code:** `RS-REVERSE-004`

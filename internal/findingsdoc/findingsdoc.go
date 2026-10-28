@@ -47,6 +47,10 @@ func Page(e findings.Explanation) string {
 	if tuned && meta.SEOTitle != "" {
 		fmt.Fprintf(&b, "seoTitle: %s\n", yamlQuote(meta.SEOTitle))
 	}
+	// The sidebar shows the code alone: it is what a reader arriving from a CI
+	// log is looking for, and the full title wrapped to three lines per item.
+	// The page heading keeps the descriptive title.
+	fmt.Fprintf(&b, "sidebar:\n  label: %s\n", yamlQuote(e.Code))
 	fmt.Fprintf(&b, "---\n\n")
 
 	fmt.Fprintf(&b, "**Namespace:** `%s` · **Code:** `%s`\n\n", Namespace(e.Code), e.Code)

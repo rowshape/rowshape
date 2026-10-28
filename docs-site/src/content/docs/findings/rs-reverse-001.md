@@ -2,6 +2,8 @@
 title: 'RS-REVERSE-001 — DROP COLUMN loses its data irreversibly'
 description: 'Dropping a column permanently removes its values across every row. A down-migration can recreate the column, but not what it held.'
 seoTitle: 'RS-REVERSE-001: DROP COLUMN loses its data irreversibly'
+sidebar:
+  label: 'RS-REVERSE-001'
 ---
 
 **Namespace:** `RS-REVERSE` · **Code:** `RS-REVERSE-001`

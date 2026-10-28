@@ -2,6 +2,8 @@
 title: 'RS-LOCK-003 — ATTACH PARTITION validates the incoming rows under a lock on the parent'
 description: 'ATTACH PARTITION takes ACCESS EXCLUSIVE on the parent table, blocking every partition, then scans the incoming rows against the bound.'
 seoTitle: 'RS-LOCK-003: ATTACH PARTITION locks the parent table'
+sidebar:
+  label: 'RS-LOCK-003'
 ---
 
 **Namespace:** `RS-LOCK` · **Code:** `RS-LOCK-003`

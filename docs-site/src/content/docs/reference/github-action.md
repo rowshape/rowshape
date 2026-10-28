@@ -2,6 +2,7 @@
 title: "The rowshape GitHub Action"
 description: "Run rowshape validate in GitHub Actions and gate a pull request on the verdict, with findings annotated inline on the lines that caused them."
 sidebar:
+  hidden: true
   order: 99
 ---
 
