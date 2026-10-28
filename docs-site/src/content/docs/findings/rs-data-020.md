@@ -14,8 +14,7 @@ Delete or repair the orphaned rows before validating the foreign key: ADD the co
 
 ## References
 
-- RFC §6.6
-- PRD §10
+- [Fixture spec §6.6: References and fan-out](/spec/)
 
 ---
 

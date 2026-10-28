@@ -14,9 +14,8 @@ Split across transactions: ADD CONSTRAINT ... NOT VALID and COMMIT, then VALIDAT
 
 ## References
 
-- RFC §6.4
-- RFC §9.1
-- PRD §10
+- [Fixture spec §6.4: Constraints](/spec/)
+- [Fixture spec §9.1: Extrapolation is model-based, not linear](/spec/)
 
 ---
 

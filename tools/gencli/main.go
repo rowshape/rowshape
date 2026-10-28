@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -177,7 +178,7 @@ func commandPage(c *cobra.Command, order int) string {
 	b.WriteString(frontmatter("rowshape "+c.Name(), docsDescription(c), order))
 
 	if c.Long != "" {
-		b.WriteString(c.Long)
+		b.WriteString(linkSpecRefs(c.Long))
 		b.WriteString("\n\n")
 	} else if c.Short != "" {
 		b.WriteString(c.Short)
@@ -229,7 +230,7 @@ func flagTable(fs *pflag.FlagSet) string {
 		if r.def != "" && r.def != "false" && r.def != "[]" {
 			def = "`" + r.def + "`"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s |\n", name, def, escapePipes(r.usage))
+		fmt.Fprintf(&b, "| %s | %s | %s |\n", name, def, linkSpecRefs(escapePipes(r.usage)))
 	}
 	b.WriteString("\n")
 	return b.String()
@@ -266,11 +267,24 @@ func actionPage(repoRoot string) (string, error) {
 	var b strings.Builder
 	b.WriteString(frontmatter(title, "Run rowshape validate in GitHub Actions and gate a pull request on the verdict, with findings annotated inline on the lines that caused them.", 99))
 	b.WriteString("{/* Generated from docs/action.md by `go run ./tools/gencli` — edit that file. */}\n\n")
+	text = linkSpecRefs(text)
 	b.WriteString(text)
 	if !strings.HasSuffix(text, "\n") {
 		b.WriteString("\n")
 	}
 	return b.String(), nil
+}
+
+// specRef matches a citation of the fixture spec in help text, e.g. "RFC §8.3".
+var specRef = regexp.MustCompile(`RFC §(\d+(?:\.\d+)*)`)
+
+// linkSpecRefs turns each fixture-spec citation into a link to the site's spec
+// page. In a terminal "RFC §8.3" is a fine pointer — the reader has the repo —
+// but on the site a bare section number is a reference the reader cannot open,
+// and check-build fails on one. Rewriting it here rather than in the cobra text
+// keeps --help unchanged.
+func linkSpecRefs(s string) string {
+	return specRef.ReplaceAllString(s, "[fixture spec §$1](/spec/)")
 }
 
 // escapePipes keeps a flag description containing "|" from breaking the table.

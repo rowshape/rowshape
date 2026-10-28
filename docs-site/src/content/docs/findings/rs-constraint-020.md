@@ -14,8 +14,7 @@ Split it in two. First ADD CONSTRAINT ... NOT VALID, which takes only a brief lo
 
 ## References
 
-- PRD §10
-- RFC §9.1
+- [Fixture spec §9.1: Extrapolation is model-based, not linear](/spec/)
 
 ---
 

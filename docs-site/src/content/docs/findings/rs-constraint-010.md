@@ -14,9 +14,8 @@ Repair or exclude the rows that violate the predicate before adding the CHECK (o
 
 ## References
 
-- RFC §6.1
-- RFC §6.4
-- PRD §10
+- [Fixture spec §6.1: Universal fields](/spec/)
+- [Fixture spec §6.4: Constraints](/spec/)
 
 ---
 

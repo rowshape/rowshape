@@ -842,6 +842,51 @@ async function checkCriticalPath(pages) {
 	return [...problems, ...over];
 }
 
+/**
+ * No public page cites a document the reader cannot open.
+ *
+ * The code and the catalog were written against an internal product plan, and
+ * its section numbers ("PRD §10") and invariant names ("INV-UNIQUENESS") leaked
+ * into ~35 places on the site — the finding pages' References lists, the GitHub
+ * Action guide, the agents page. To a reader they are citations to nothing: the
+ * plan is not published. Each one was rewritten at its source to state the
+ * commitment in plain words, or dropped; this keeps them from coming back
+ * through the next generated page.
+ *
+ * The fixture spec IS published, so "RFC §8.3" is allowed — but only as a link
+ * to the on-site spec page, which is where it can be followed from. That covers
+ * the HTML <title> and meta tags too, where a link is impossible, so a section
+ * number there fails.
+ */
+const PLAN_REF = /PRD §|\bINV-[A-Z]/;
+const SPEC_REF = /\bRFC(?:-0001)?\s*§/;
+
+async function checkInternalReferences(pages) {
+	const problems = [];
+	const report = (file, text) => {
+		const plan = text.match(PLAN_REF);
+		if (plan) {
+			const at = text.indexOf(plan[0]);
+			problems.push(`${file}: internal planning reference "${text.slice(at, at + 24).replace(/\s+/g, ' ')}…"`);
+		}
+		const spec = text.match(SPEC_REF);
+		if (spec) {
+			const at = text.indexOf(spec[0]);
+			problems.push(`${file}: spec reference "${text.slice(at, at + 16)}" is not a link to /spec/`);
+		}
+	};
+	for (const page of pages) {
+		const html = await readFile(page, 'utf8');
+		// A spec citation inside a link to the spec page is the allowed form.
+		report(page, html.replace(/<a\b[^>]*href="\/spec\/[^"]*"[^>]*>[\s\S]*?<\/a>/g, ''));
+	}
+	const llms = join(DIST, 'llms.txt');
+	if (existsSync(llms)) {
+		report(llms, (await readFile(llms, 'utf8')).replace(/\[[^\]]*\]\(https?:\/\/[^)]*\/spec\/[^)]*\)/g, ''));
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -952,9 +997,19 @@ async function main() {
 				'is a product decision, not a build fix.'
 		);
 	}
+	// Self-reporting checks: each entry is one line, so adding one does not touch
+	// the call list above or the summary below.
+	for (const [what, problems] of [
+		['internal-reference', await checkInternalReferences(pages)],
+	]) {
+		if (!problems.length) continue;
+		failed = true;
+		console.error(`${problems.length} ${what} problem(s):`);
+		for (const p of problems) console.error(`  ${p}`);
+	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
+	console.log(`OK:${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
 }
 
 await main();

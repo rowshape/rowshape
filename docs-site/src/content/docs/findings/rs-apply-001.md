@@ -14,8 +14,7 @@ Read the SQLSTATE and message in the finding's evidence: they are the database's
 
 ## References
 
-- PRD §10
-- RFC §13
+- [Fixture spec §13: Conformance](/spec/)
 
 ---
 

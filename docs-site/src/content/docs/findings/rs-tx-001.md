@@ -12,11 +12,6 @@ Postgres refuses a handful of statements inside a transaction block with SQLSTAT
 
 Move the statement into its own migration that runs outside a transaction, and tell your runner. Alembic: set transaction_per_migration and use an autocommit block. Django: set atomic = False on the Migration class. Rails: disable_ddl_transaction!. Flyway: use a script-based migration or set executeInTransaction to false. golang-migrate: it does not wrap by default, so no change is needed. If you opened the transaction yourself with BEGIN, split the statement out of that block.
 
-## References
-
-- PRD §10
-- PRD §13
-
 ---
 
 This page is generated from the same catalog `rowshape explain RS-TX-001` reads, so the remediation here is byte-identical to the one a verdict carries — they cannot drift. An agent can read it with the `explain_finding` MCP tool.

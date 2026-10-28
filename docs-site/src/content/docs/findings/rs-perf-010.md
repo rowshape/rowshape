@@ -12,10 +12,6 @@ RS-PERF-002 only fires when a statement has NO WHERE clause, but the real-world 
 
 Batch it. Loop over a bounded key range — UPDATE ... WHERE id BETWEEN :lo AND :hi AND <predicate> — committing each batch, so no single transaction holds locks over the whole table and autovacuum can keep up between batches. Ten to fifty thousand rows per batch is a common starting point. Run the backfill OUTSIDE the migration if your runner wraps migrations in one transaction, since batching inside a single transaction defeats the purpose. If the statement genuinely matches only a handful of rows, the upper bound reported here is conservative and you can disregard it.
 
-## References
-
-- PRD §10
-
 ---
 
 This page is generated from the same catalog `rowshape explain RS-PERF-010` reads, so the remediation here is byte-identical to the one a verdict carries — they cannot drift. An agent can read it with the `explain_finding` MCP tool.

@@ -12,11 +12,6 @@ The migration is safe and fast — this is not a lock or a data problem. The haz
 
 Use expand/contract across separate deploys rather than renaming in place. EXPAND: add the new column, and have the application write BOTH names. BACKFILL: copy the existing values across. SWITCH: ship a release that reads the new name. CONTRACT: once no running code references the old name, drop it in a later migration. For a table, the same shape works with a view carrying the old name over the new table while the switch lands.
 
-## References
-
-- PRD §10
-- PRD §12
-
 ---
 
 This page is generated from the same catalog `rowshape explain RS-DEPLOY-001` reads, so the remediation here is byte-identical to the one a verdict carries — they cannot drift. An agent can read it with the `explain_finding` MCP tool.

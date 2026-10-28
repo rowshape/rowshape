@@ -14,8 +14,7 @@ Add a CHECK constraint matching the partition bound to the incoming table BEFORE
 
 ## References
 
-- PRD §10
-- RFC §14.2
+- [Fixture spec §14.2: Partitioned tables](/spec/)
 
 ---
 

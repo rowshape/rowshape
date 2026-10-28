@@ -14,8 +14,7 @@ Avoid the full-table ACCESS EXCLUSIVE rewrite. For a volatile default: ADD the c
 
 ## References
 
-- RFC §9.1
-- PRD §10
+- [Fixture spec §9.1: Extrapolation is model-based, not linear](/spec/)
 
 ---
 

@@ -14,8 +14,7 @@ Use REINDEX INDEX CONCURRENTLY (PG 12+) so the rebuild does not block writes.
 
 ## References
 
-- RFC §6.5
-- PRD §10
+- [Fixture spec §6.5: Indexes](/spec/)
 
 ---
 

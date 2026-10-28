@@ -14,8 +14,7 @@ Delete in bounded batches (by primary-key range), and check the fan-out tail bef
 
 ## References
 
-- RFC §6.6
-- PRD §10
+- [Fixture spec §6.6: References and fan-out](/spec/)
 
 ---
 

@@ -37,8 +37,16 @@ func Page(e findings.Explanation) string {
 	// Frontmatter. Values are single-quoted and internal quotes doubled so a
 	// title or summary with punctuation cannot break the YAML.
 	fmt.Fprintf(&b, "---\n")
+	meta, tuned := pageMetas[e.Code]
+	desc := firstSentence(e.Summary)
+	if tuned && meta.Description != "" {
+		desc = meta.Description
+	}
 	fmt.Fprintf(&b, "title: %s\n", yamlQuote(e.Code+" — "+e.Title))
-	fmt.Fprintf(&b, "description: %s\n", yamlQuote(firstSentence(e.Summary)))
+	fmt.Fprintf(&b, "description: %s\n", yamlQuote(desc))
+	if tuned && meta.SEOTitle != "" {
+		fmt.Fprintf(&b, "seoTitle: %s\n", yamlQuote(meta.SEOTitle))
+	}
 	fmt.Fprintf(&b, "---\n\n")
 
 	fmt.Fprintf(&b, "**Namespace:** `%s` · **Code:** `%s`\n\n", Namespace(e.Code), e.Code)
@@ -46,9 +54,9 @@ func Page(e findings.Explanation) string {
 
 	fmt.Fprintf(&b, "## Remediation\n\n%s\n\n", e.Remediation)
 
-	if len(e.References) > 0 {
+	if refs := publicReferences(e.References); len(refs) > 0 {
 		fmt.Fprintf(&b, "## References\n\n")
-		for _, r := range e.References {
+		for _, r := range refs {
 			fmt.Fprintf(&b, "- %s\n", r)
 		}
 		fmt.Fprintf(&b, "\n")

@@ -6,7 +6,7 @@ seoTitle: 'RS-DATA-014: ADD UNIQUE without proven uniqueness'
 
 **Namespace:** `RS-DATA` · **Code:** `RS-DATA-014`
 
-ADD CONSTRAINT UNIQUE can only succeed if the column is actually unique. Uniqueness is never inferred from a sample (INV-UNIQUENESS): unproven uniqueness cannot certify PASS, and proven duplicates make the constraint fail to build.
+ADD CONSTRAINT UNIQUE can only succeed if the column is actually unique. rowshape never infers uniqueness from a sample, so uniqueness that is not proven cannot certify a PASS, and proven duplicates make the constraint fail to build.
 
 ## Remediation
 
@@ -14,9 +14,8 @@ Prove uniqueness before adding the constraint. If duplicates already exist, de-d
 
 ## References
 
-- RFC §7.2
-- RFC §7.4
-- PRD §10
+- [Fixture spec §7.2: Uniqueness is never estimated](/spec/)
+- [Fixture spec §7.4: Verdict capping (the payoff)](/spec/)
 
 ---
 

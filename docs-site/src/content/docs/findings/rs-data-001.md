@@ -14,8 +14,7 @@ Backfill or delete the NULL rows first, or add a DEFAULT; then SET NOT NULL. A v
 
 ## References
 
-- RFC §7.4
-- PRD §10
+- [Fixture spec §7.4: Verdict capping (the payoff)](/spec/)
 
 ---
 

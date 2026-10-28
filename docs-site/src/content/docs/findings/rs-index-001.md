@@ -14,9 +14,8 @@ Use CREATE INDEX CONCURRENTLY: it builds in two passes without an exclusive lock
 
 ## References
 
-- RFC §6.5
-- RFC §9.1
-- PRD §10
+- [Fixture spec §6.5: Indexes](/spec/)
+- [Fixture spec §9.1: Extrapolation is model-based, not linear](/spec/)
 
 ---
 

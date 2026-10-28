@@ -12,10 +12,6 @@ The migration is instant and safe for the database. The hazard is the contract: 
 
 Ship the code that TOLERATES a null first, then relax the constraint in a later migration. That is the same expand/contract ordering a rename needs, in the other direction: make the readers safe before the writers are allowed to produce the new shape. If the column is exposed through an API or a downstream schema, check those contracts too — a nullable column is a breaking change to a consumer that declared it required.
 
-## References
-
-- PRD §10
-
 ---
 
 This page is generated from the same catalog `rowshape explain RS-DEPLOY-003` reads, so the remediation here is byte-identical to the one a verdict carries — they cannot drift. An agent can read it with the `explain_finding` MCP tool.

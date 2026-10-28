@@ -18,16 +18,46 @@ func TestPageContainsCatalogFields(t *testing.T) {
 	page := Page(e)
 	for _, want := range []string{
 		"title: 'RS-LOCK-001 — a title'",
-		"description: 'one sentence.'", // first sentence only
+		"description: " + yamlQuote(pageMetas["RS-LOCK-001"].Description), // tuned for search
+		"seoTitle: " + yamlQuote(pageMetas["RS-LOCK-001"].SEOTitle),
 		"`RS-LOCK`",                    // namespace
 		"one sentence. two sentence.",  // full summary in the body
 		"## Remediation",
 		"do the thing",
-		"RFC §9.1",
+		"[Fixture spec §9.1: Extrapolation is model-based, not linear](/spec/)",
 		"rowshape explain RS-LOCK-001",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page missing %q:\n%s", want, page)
+		}
+	}
+	// The internal plan is not published; a reader cannot follow it.
+	if strings.Contains(page, "PRD §") {
+		t.Errorf("page cites the unpublished plan:\n%s", page)
+	}
+}
+
+// TestPageDescriptionFallback: a code with no tuned frontmatter still gets a
+// description — the summary's first sentence — and no seoTitle.
+func TestPageDescriptionFallback(t *testing.T) {
+	page := Page(findings.Explanation{Code: "RS-X-001", Title: "t", Summary: "one sentence. two sentence."})
+	if !strings.Contains(page, "description: 'one sentence.'\n") || strings.Contains(page, "seoTitle:") {
+		t.Errorf("fallback frontmatter wrong:\n%s", page)
+	}
+}
+
+// TestEveryCodeHasTunedMeta: the search-facing title and description are
+// written per code; a new code without them would ship a truncated <title>.
+func TestEveryCodeHasTunedMeta(t *testing.T) {
+	for _, code := range findings.Codes() {
+		m, ok := pageMetas[code]
+		if !ok || m.SEOTitle == "" || m.Description == "" {
+			t.Errorf("%s has no seoTitle/description in pageMetas (meta.go)", code)
+		}
+	}
+	for code := range pageMetas {
+		if _, ok := findings.Explain(code); !ok {
+			t.Errorf("pageMetas has an entry for %s, which is not in the catalog", code)
 		}
 	}
 }

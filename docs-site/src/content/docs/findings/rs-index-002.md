@@ -14,9 +14,8 @@ Build the index first without the exclusive lock, then adopt it: CREATE UNIQUE I
 
 ## References
 
-- RFC §6.5
-- RFC §9.1
-- PRD §10
+- [Fixture spec §6.5: Indexes](/spec/)
+- [Fixture spec §9.1: Extrapolation is model-based, not linear](/spec/)
 
 ---
 
