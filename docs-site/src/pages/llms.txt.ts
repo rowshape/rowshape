@@ -23,6 +23,16 @@ import { SITE, REPO } from '../site';
 const SECTIONS: { dir: string; heading: string; note: string }[] = [
 	{ dir: 'install', heading: 'Install', note: 'Getting the binary.' },
 	{
+		dir: 'quickstart',
+		heading: 'Quickstart',
+		note: 'Install to first verdict: pull, validate a failing migration, fix it, PASS.',
+	},
+	{
+		dir: 'guides',
+		heading: 'Guides',
+		note: 'Task-shaped pages: gating CI on a verdict.',
+	},
+	{
 		dir: 'reference',
 		heading: 'CLI reference',
 		note: 'Every command and flag, generated from the binary itself.',
@@ -44,6 +54,11 @@ const SECTIONS: { dir: string; heading: string; note: string }[] = [
 		note: 'What rowshape can and cannot know. Read this before trusting a PASS.',
 	},
 	{ dir: 'privacy', heading: 'Privacy', note: 'What a fixture does and does not contain.' },
+	{
+		dir: 'faq',
+		heading: 'FAQ',
+		note: 'How rowshape compares with linters and migration executors, data handling, MySQL, production access.',
+	},
 ];
 
 export const GET: APIRoute = async () => {
