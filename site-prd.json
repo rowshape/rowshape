@@ -47,101 +47,188 @@
       "id": "SITE-2",
       "area": "security+performance",
       "title": "public/_headers: baseline security headers and immutable caching for hashed assets",
-      "status": "open",
-      "plan": "HSTS, nosniff, Referrer-Policy, Permissions-Policy, X-Frame-Options DENY, COOP on /*; /_astro/* immutable 1y; /pagefind/* short max-age. check-build asserts each header and that every dist/_astro file name carries a hash."
+      "status": "done",
+      "iteration": 2,
+      "verified": [
+        "public/_headers: HSTS (no preload), nosniff, Referrer-Policy, Permissions-Policy, X-Frame-Options DENY, COOP on /*; /_astro/* public, max-age=31536000, immutable; /pagefind/* max-age=300 because pagefind.js, the worker and wasm are not content-hashed",
+        "Cache-Control is never set by two overlapping rules (Cloudflare joins duplicate headers rather than overriding)",
+        "checkHeaders() negative-tested: HSTS removed, Cache-Control on /*, non-immutable /_astro/*, an unhashed /_astro file, missing _headers each fail"
+      ]
     },
     {
       "id": "SITE-3",
       "area": "security",
       "title": "Hash-based Content-Security-Policy generated from dist after build",
-      "status": "open",
-      "plan": "scripts/gen-csp.mjs hashes every executable inline script in dist/**/*.html and writes the CSP into dist/_headers (header, not <meta>, so frame-ancestors works). Pagefind needs wasm-unsafe-eval + worker-src self. Verify zero CSP violations in Playwright across all pages and an opened search before enforcing; check-build fails if any inline script hash is missing."
+      "status": "done",
+      "iteration": 3,
+      "verified": [
+        "scripts/gen-csp.mjs runs after astro build and writes an enforced (not Report-Only) CSP into dist/_headers from the inline scripts actually in dist; 11 hashes after all lanes merged, policy under Cloudflare's 2000-char line limit",
+        "worker-src 'self' is enough: Pagefind starts its worker from /pagefind/pagefind-worker.js, not blob:",
+        "rollup: all 53 pages x 1280/375px served with the real headers: CSP present on 106/106 loads, search (lazy-loaded, SITE-5) returns results, theme toggle + reload, copy button: 0 violations, 0 page errors",
+        "checkCSP() fails on a missing hash, on an inline on* handler, on 'unsafe-inline' and on Report-Only"
+      ]
     },
     {
       "id": "SITE-4",
       "area": "security",
       "title": "security.txt and deploy-job hardening",
-      "status": "open",
-      "plan": "public/.well-known/security.txt from SECURITY.md (Contact, Expires <1y, Policy, Canonical) with a check-build expiry guard. Workflow: persist-credentials false, pin wranglerVersion, deploy ships the checked build artifact instead of rebuilding, don't cancel in-progress deploys on main."
+      "status": "done",
+      "iteration": 4,
+      "verified": [
+        "public/.well-known/security.txt (RFC 9116), Expires 2027-09-28; check warns under 30 days left and fails once expired, over a year out, or with a non-https Contact",
+        "deploy job downloads and ships the build job's checked artifact (no second npm ci/build); upload sets include-hidden-files so .well-known/ survives",
+        "persist-credentials: false; wrangler pinned 4.154.0; cancel-in-progress only off main; workflow_dispatch now actually deploys (the push-only if: had silently ignored it)",
+        "NOT verified on real Actions/Cloudflare yet; no protected GitHub environment (needs repo settings)"
+      ]
     },
     {
       "id": "SITE-5",
       "area": "performance",
       "title": "Load the search UI on intent, and make the JS budget count what pages really load",
-      "status": "open",
-      "plan": "Override Starlight Search so the 94 KB ui-core chunk loads on focus/hover/click/Ctrl+K instead of on idle. check-build follows dynamic import() from loaded chunks and reports initial vs deferred JS."
+      "status": "done",
+      "iteration": 5,
+      "verified": [
+        "custom Search.astro loads the 94 KB search UI on hover/focus/click/Ctrl+K/'/' instead of on idle: JS on load / 99,690 -> 5,972 bytes; /install/ 104,852 -> 11,134",
+        "first keypress opens search; keys typed before the UI arrives are buffered and replayed (tested with ui-core delayed 1.5s)",
+        "check-build now follows static and dynamic imports: initial 9.2-16.0 KiB against 32 KiB, deferred 92.1 KiB against a new 112 KiB cap; both caps negative-tested"
+      ]
     },
     {
       "id": "SITE-6",
       "area": "accessibility",
       "title": "Keyboard-scrollable tables, named code regions, no empty table headers",
-      "status": "open",
-      "plan": "rehype plugin wraps tables in a focusable labelled region; code blocks wrap on narrow screens so they stop becoming unnamed scroll regions; fix the empty <th> on /privacy/. check-build fails on bare tables and empty <th>."
+      "status": "done",
+      "iteration": 6,
+      "verified": [
+        "rehype-scrollable-tables wraps every content table in a focusable region named after its heading; code blocks wrap (wrap + preserveIndent); empty <th> on /privacy/ named",
+        "the table guard found raw <table>/<name> placeholders rendering as HTML on four finding pages (RS-DEPLOY-002 drew an empty table); findingsdoc.Prose() now escapes them",
+        "rollup: axe-core 4.10.2 on all 53 pages at 375 and 1280px, light and dark: 0 violating nodes (baseline 54 at 375px)"
+      ]
     },
     {
       "id": "SITE-7",
       "area": "ui+accessibility",
       "title": "Brand theme, real favicon set, forced-colors fixes, lighter social card",
-      "status": "open",
-      "plan": "customCss with brand accent (#2E4A7D family) in light and dark with AA contrast; logo + favicon.svg/.ico/apple-touch-icon; forced-colors rule for the copy button; og.png palette-encoded under 40 KB."
+      "status": "done",
+      "iteration": 7,
+      "verified": [
+        "theme.css accent #2E4A7D light / tint dark; computed contrast 7.58-13.88:1 for text, 5.31:1 for the dark focus ring",
+        "new rows mark as favicon.svg and header logo; favicon.ico 32px (484 B) and apple-touch-icon 180px from npm run icons",
+        "forced-colors: copy-button icon visible again (was a blank square)",
+        "og.png 56,736 -> 17,333 bytes (64-colour palette), eyeballed at full size and 3x; check-build caps it at 40 KiB"
+      ]
     },
     {
       "id": "SITE-8",
       "area": "ux",
       "title": "Homepage shows the product: migration in, verdict out, above the fold",
-      "status": "open",
-      "plan": "Under the hero: failing migration SQL beside the `rowshape validate` output; how-it-works Steps (pull, hydrate, validate); Tabs for CLI / GitHub Action / MCP. Move 'The problem' below."
+      "status": "done",
+      "iteration": 8,
+      "verified": [
+        "homepage shows the demo's naive migration and the verbatim output of a real rowshape validate run (WARN RS-LOCK-001 + RS-LOCK-010, exit 2), then the PASS rewrite",
+        "How it works as Steps; CLI / GitHub Action / MCP Tabs, MCP snippet taken from a real init --agent run",
+        "example begins inside the 1440x900 first viewport (y=856) and at y=499 on 390x844; screenshots re-checked after all merges"
+      ]
     },
     {
       "id": "SITE-9",
       "area": "ux+content",
       "title": "Quickstart: install to first verdict",
-      "status": "open",
-      "plan": "New /quickstart/ built from demo/ and the README quickstart; every command checked against the CLI. Sidebar after Install, second hero action, 'Next' link from install."
+      "status": "done",
+      "iteration": 9,
+      "verified": [
+        "/quickstart/: install, scratch Postgres, pull with a read-only role, inspect --leaks, a SET NOT NULL that FAILs (RS-APPLY-001 + RS-DATA-001, exit 1), explain, validated-CHECK fix, PASS, exit codes; outputs from real runs",
+        "honest about the remaining WARN for backfill + SET NOT NULL, and that validate refuses to run against the host the fixture was pulled from",
+        "linked from sidebar, hero, end of Install, llms.txt, breadcrumbs"
+      ]
     },
     {
       "id": "SITE-10",
       "area": "ux+content",
       "title": "Install page: pre-release truth, platform tabs, correct links",
-      "status": "open",
-      "plan": "Caution aside for channels that land with the first tag; Tabs per platform; fix the 'GitHub Action guide' link that points to /agent/ and the off-site docs/action.md link; supply-chain detail collapsible."
+      "status": "done",
+      "iteration": 10,
+      "verified": [
+        "caution aside: only go install works before the first tag; Homebrew, Docker, Releases and the Action's @v1 land with it; npm is a 0.0.0 placeholder",
+        "install is .mdx with macOS/Linux/Windows/CI Tabs, URL unchanged; archive names from .goreleaser.yaml incl. the Windows .zip",
+        "the ../agent/ and off-site docs/action.md links now go to /reference/github-action/; cosign verification collapsed"
+      ]
     },
     {
       "id": "SITE-11",
       "area": "content",
       "title": "Remove internal planning references (PRD §, INV-*) from public pages",
-      "status": "open",
-      "plan": "Rewrite or drop them at the source (content, generator inputs, registry summaries); check-build fails on 'PRD §' or INV- in dist."
+      "status": "done",
+      "iteration": 11,
+      "verified": [
+        "40 'PRD §'/INV-* occurrences in dist -> 0; the guard reported 44 on the old build",
+        "rollup found the CLI itself printed 'References: RFC §7.4, PRD §10' from rowshape explain (quoted by the Quickstart); registry References now carry only published spec sections",
+        "RFC § must be a link to /spec/ except inside quoted terminal output; PRD § is banned everywhere including llms.txt"
+      ]
     },
     {
       "id": "SITE-12",
       "area": "ux+content",
       "title": "Finding pages get a fixed structure with a failing and a fixed example",
-      "status": "open",
-      "plan": "Extend the findings registry with example/fixed SQL; generator emits What it means / Example / How to fix / Related. Spec references become links. Staleness tests and `rowshape explain` stay consistent."
+      "status": "done",
+      "iteration": 12,
+      "verified": [
+        "all 27 finding pages: What it means / Why it matters / Example / How to fix (catalog remediation verbatim + fixed SQL) / Related codes / References; examples in internal/findings/examples.go so explain output is unchanged",
+        "TestFindingExamples runs every example and fix through validate on PG 16: each example reports its code, each fix does not fail",
+        "running the fixes found and fixed three product bugs: CONCURRENTLY DROP/REINDEX run inside a transaction in the sandbox; a leading comment hid CONCURRENTLY/BEGIN from the classifier; RS-CONSTRAINT-001 fired on its own recommended split-file fix",
+        "the SEO loop's hand-tuned titles/descriptions now live in internal/findingsdoc/meta.go, so the genfindings staleness test passes again"
+      ]
     },
     {
       "id": "SITE-13",
       "area": "ux",
       "title": "Sidebar and navigation for the CI and integration reader",
-      "status": "open",
-      "plan": "Integrations group (GitHub Action, MCP); findings grouped by namespace, collapsed, labelled by code; useful prev/next on findings; 404 points at search and explains the RS-XXX-000 shape."
+      "status": "done",
+      "iteration": 13,
+      "verified": [
+        "findings in 9 collapsed namespace groups, labelled by code, built from the directory; prev/next follow namespace order",
+        "Integrations group (GitHub Action, Agents & MCP) with no URL changes; 404 explains the RS-LOCK-001 code shape and points at the catalog and search",
+        "rollup: six single-page sections rendered as 'Install > Install'-style groups; regrouped into 'Start here' (Install, Quickstart, FAQ) and 'Data & trust' (Privacy, Fidelity, Fixture spec), screenshot checked"
+      ]
     },
     {
       "id": "SITE-14",
       "area": "content",
       "title": "FAQ with comparison, and a 'rowshape in CI' page",
-      "status": "open",
-      "plan": "FAQ answering how rowshape differs from static linters (squawk, strong_migrations) and pgroll; CI page with exit codes and warn-as-fail. Included in llms.txt and the sitemap."
+      "status": "done",
+      "iteration": 14,
+      "verified": [
+        "/guides/ci/: exit codes, --warn-fail and the Action's warn-as-fail (says there is no threshold option, because none exists), real annotate output, full workflow",
+        "/faq/: squawk and strong_migrations check the operation not the data; pgroll applies migrations rather than checking them; telemetry, production access, MySQL",
+        "/guides/ hub page so the breadcrumb does not 404; all new pages in sitemap with lastmod and in llms.txt"
+      ]
     },
     {
       "id": "SITE-15",
       "area": "rollup",
       "title": "Rollup: re-run all three audits against the merged site and close or re-open every story",
-      "status": "open"
+      "status": "done",
+      "iteration": 15,
+      "verified": [
+        "four lanes merged; check-build conflicts resolved keeping every lane's guards and one OK line naming all of them",
+        "rollup audits on the merged build: npm audit 0 vulnerabilities; axe 0 violating nodes over 53 pages x 2 widths x 2 schemes; 0 CSP violations under the real headers; go test ./... green; npm run verify green",
+        "rollup found and fixed: rowshape explain printing PRD § to users; redundant single-page sidebar groups; the findings structure test comparing against unescaped remediation"
+      ]
     }
   ],
   "not_doing": [
     "Deleting the two unused Gemini_Generated_Image_*.png files at the repo root (2.8 MB, unreferenced): they are the owner's files and may be intended as brand assets; raised with the owner instead"
-  ]
+  ],
+  "final_state": {
+    "date": "2026-10-28",
+    "stories_done": 15,
+    "follow_ups": [
+      "Run the new artifact-based deploy on GitHub Actions/Cloudflare once (first push to main) and confirm headers on the live site with curl -I",
+      "Create a protected 'production' GitHub environment restricted to main and move CLOUDFLARE_* secrets into it, then add environment: production to the deploy job",
+      "validate refuses to run on the fixture's source host and treats every loopback name as one host, so a single-laptop first run needs a second host (product decision)",
+      "validate --ephemeral refuses ATTACH PARTITION, but the sandbox handled it once the fixture declared a partition key; the refusal looks stale (product decision)",
+      "TestFindingExamples needs a live PostgreSQL; confirm CI provides one, and extend to PG 10-15",
+      "Decide on the two unreferenced Gemini_Generated_Image_*.png files at the repo root"
+    ]
+  }
 }

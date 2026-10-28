@@ -126,22 +126,17 @@ export default defineConfig({
 			// (install, findings, privacy) and P4-T5 (agents/MCP, fixture spec); this
 			// is the shape it lands into.
 			sidebar: [
-				{ label: 'Install', items: [{ autogenerate: { directory: 'install' } }] },
-				// Install to first verdict, so it sits directly after Install.
-				{ label: 'Quickstart', items: [{ autogenerate: { directory: 'quickstart' } }] },
+				// Six of the sections hold a single page, which rendered as a group
+				// repeating its own name ("Install > Install"). Those pages are slug
+				// items in two groups named for the reader's question instead; URLs
+				// are unchanged because sidebar placement never moves a file.
+				{
+					label: 'Start here',
+					items: [{ slug: 'install' }, { slug: 'quickstart' }, { slug: 'faq' }],
+				},
 				// Task-shaped pages (CI) that cut across the reference, rather than
 				// describing one command.
 				{ label: 'Guides', items: [{ autogenerate: { directory: 'guides' } }] },
-				// Generated from the cobra tree by `go run ./tools/gencli`, with a
-				// staleness test, so the reference cannot drift from the binary.
-				{ label: 'CLI reference', items: [{ autogenerate: { directory: 'reference' } }] },
-				// Grouped by namespace and labelled by code; see the helper for why.
-				{ label: 'Findings', items: findingsSidebar() },
-				{ label: 'Privacy', items: [{ autogenerate: { directory: 'privacy' } }] },
-				// What the tool can and cannot know. PRD §14 committed to saying this
-				// in the docs ("Fixture fidelity is a tarpit ... Say so in the docs")
-				// and the page did not exist until CR4-T13.
-				{ label: 'Fidelity', items: [{ autogenerate: { directory: 'fidelity' } }] },
 				// Everything that runs rowshape from somewhere else: CI and agents. The
 				// Action page lives under /reference/ (its URL is linked from READMEs
 				// and the Marketplace), so it is a slug item here rather than a moved
@@ -154,8 +149,18 @@ export default defineConfig({
 						{ autogenerate: { directory: 'agent' } },
 					],
 				},
-				{ label: 'Fixture spec', items: [{ autogenerate: { directory: 'spec' } }] },
-				{ label: 'FAQ', items: [{ autogenerate: { directory: 'faq' } }] },
+				// Generated from the cobra tree by `go run ./tools/gencli`, with a
+				// staleness test, so the reference cannot drift from the binary.
+				{ label: 'CLI reference', items: [{ autogenerate: { directory: 'reference' } }] },
+				// Grouped by namespace and labelled by code; see the helper for why.
+				{ label: 'Findings', items: findingsSidebar() },
+				// What leaves the machine, what the tool can and cannot know (the docs
+				// promised to say fixture fidelity has limits), and the published
+				// format a fixture follows.
+				{
+					label: 'Data & trust',
+					items: [{ slug: 'privacy' }, { slug: 'fidelity' }, { slug: 'spec' }],
+				},
 			],
 		}),
 	],
