@@ -156,7 +156,7 @@ SET NOT NULL scans the table and rejects rows that are NULL. If the column's nul
 Remediation:
   Backfill or delete the NULL rows first, or add a DEFAULT; then SET NOT NULL. A validated CHECK (col IS NOT NULL) lets SET NOT NULL skip the full-table scan on PG 12+.
 
-References: RFC §7.4, PRD §10
+References: RFC §7.4
 ```
 
 ## 7. Fix it and get a PASS

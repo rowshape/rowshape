@@ -205,9 +205,13 @@ func applyOne(ctx context.Context, conn *pgx.Conn, sql string) Statement {
 	st := Statement{SQL: sql}
 	st.IsIndexBuild, st.Concurrent = classifyIndexBuild(sql)
 
-	if st.Concurrent {
-		// CREATE INDEX CONCURRENTLY cannot run inside a transaction block; run it
-		// directly. It holds no exclusive lock, so there is nothing to inspect.
+	if st.Concurrent || sqlkind.RunsOutsideTransaction(sql) {
+		// The CONCURRENTLY forms (CREATE/DROP INDEX, REINDEX) cannot run inside a
+		// transaction block; run them directly. They hold no exclusive lock, so
+		// there is nothing to inspect. Only CREATE INDEX used to take this path,
+		// so DROP INDEX CONCURRENTLY and REINDEX CONCURRENTLY — the fixes
+		// RS-INDEX-003 and RS-INDEX-020 recommend — failed in the sandbox with
+		// 25001 and were reported as RS-APPLY-001.
 		start := time.Now()
 		tag, err := conn.Exec(ctx, sql)
 		st.DurationMs = time.Since(start).Milliseconds()
@@ -403,7 +407,7 @@ func strongestLock(ctx context.Context, tx pgx.Tx) (mode, table string) {
 // classifyIndexBuild reports whether sql builds an index and whether it does so
 // CONCURRENTLY.
 func classifyIndexBuild(sql string) (isIndex, concurrent bool) {
-	upper := strings.ToUpper(strings.TrimSpace(sql))
+	upper := strings.ToUpper(sqlkind.TrimLeadingComments(sql))
 	if !strings.HasPrefix(upper, "CREATE") || !strings.Contains(upper, "INDEX") {
 		return false, false
 	}

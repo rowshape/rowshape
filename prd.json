@@ -2887,7 +2887,7 @@
             "action.yml",
             ".github/workflows/ci.yml",
             "docs/action.md",
-            "docs-site/src/content/docs/install/index.md"
+            "docs-site/src/content/docs/install/index.mdx"
           ],
           "type": "security",
           "passes": true,

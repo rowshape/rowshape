@@ -37,18 +37,76 @@ func Page(e findings.Explanation) string {
 	// Frontmatter. Values are single-quoted and internal quotes doubled so a
 	// title or summary with punctuation cannot break the YAML.
 	fmt.Fprintf(&b, "---\n")
+	meta, tuned := pageMetas[e.Code]
+	desc := firstSentence(e.Summary)
+	if tuned && meta.Description != "" {
+		desc = meta.Description
+	}
 	fmt.Fprintf(&b, "title: %s\n", yamlQuote(e.Code+" — "+e.Title))
-	fmt.Fprintf(&b, "description: %s\n", yamlQuote(firstSentence(e.Summary)))
+	fmt.Fprintf(&b, "description: %s\n", yamlQuote(desc))
+	if tuned && meta.SEOTitle != "" {
+		fmt.Fprintf(&b, "seoTitle: %s\n", yamlQuote(meta.SEOTitle))
+	}
+	// The sidebar shows the code alone: it is what a reader arriving from a CI
+	// log is looking for, and the full title wrapped to three lines per item.
+	// The page heading keeps the descriptive title.
+	fmt.Fprintf(&b, "sidebar:\n  label: %s\n", yamlQuote(e.Code))
 	fmt.Fprintf(&b, "---\n\n")
 
 	fmt.Fprintf(&b, "**Namespace:** `%s` · **Code:** `%s`\n\n", Namespace(e.Code), e.Code)
-	fmt.Fprintf(&b, "%s\n\n", e.Summary)
 
-	fmt.Fprintf(&b, "## Remediation\n\n%s\n\n", e.Remediation)
+	// A fixed order on every page, so a reader who has seen one finding page can
+	// find the fix on any other without reading: what it is, what it costs, a
+	// migration that triggers it, what to write instead, and its neighbours.
+	fmt.Fprintf(&b, "## What it means\n\n%s\n\n", e.Summary)
 
-	if len(e.References) > 0 {
+	guide := pageGuides[e.Code]
+	if guide.Why != "" {
+		fmt.Fprintf(&b, "## Why it matters\n\n%s\n\n", guide.Why)
+	}
+
+	ex, hasExample := findings.ExampleFor(e.Code)
+	if hasExample {
+		fmt.Fprintf(&b, "## Example\n\n")
+		fmt.Fprintf(&b, "Production shape: %s This migration produces `%s` against it:\n\n", ex.Shape, e.Code)
+		writeSQL(&b, ex.Migration)
+		if ex.NeedsTarget != "" {
+			fmt.Fprintf(&b, ":::note\n%s\n:::\n\n", ex.NeedsTarget)
+		}
+		writeFixture(&b, "The fixture this example is checked against", ex.Fixture)
+	}
+
+	// The remediation is the catalog's, verbatim — it is what a verdict carries
+	// and what `rowshape explain` prints. The worked fix follows it.
+	fmt.Fprintf(&b, "## How to fix\n\n%s\n\n", e.Remediation)
+	if hasExample {
+		if ex.FixedNote != "" {
+			fmt.Fprintf(&b, "**For the example above.** %s\n\n", ex.FixedNote)
+		}
+		writeSQL(&b, ex.Fixed)
+		if ex.FixedFixture != "" {
+			writeFixture(&b, "The re-pulled fixture the fix is checked against", ex.FixedFixture)
+		}
+		if ex.StillReported != "" {
+			fmt.Fprintf(&b, ":::note[rowshape still reports %s here]\n%s\n:::\n\n", e.Code, ex.StillReported)
+		}
+	}
+
+	if len(guide.Related) > 0 {
+		fmt.Fprintf(&b, "## Related codes\n\n")
+		for _, code := range guide.Related {
+			if rel, ok := findings.Explain(code); ok {
+				// Bare code, so the site's finding-code linker turns it into a
+				// link; the title says why it is related without a click.
+				fmt.Fprintf(&b, "- %s — %s\n", code, rel.Title)
+			}
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	if refs := publicReferences(e.References); len(refs) > 0 {
 		fmt.Fprintf(&b, "## References\n\n")
-		for _, r := range e.References {
+		for _, r := range refs {
 			fmt.Fprintf(&b, "- %s\n", r)
 		}
 		fmt.Fprintf(&b, "\n")
@@ -57,8 +115,37 @@ func Page(e findings.Explanation) string {
 	fmt.Fprintf(&b, "---\n\n")
 	fmt.Fprintf(&b, "This page is generated from the same catalog `rowshape explain %s` reads, "+
 		"so the remediation here is byte-identical to the one a verdict carries — they cannot drift. "+
-		"An agent can read it with the `explain_finding` MCP tool.\n", e.Code)
+		"An agent can read it with the `explain_finding` MCP tool.", e.Code)
+	if hasExample {
+		fmt.Fprintf(&b, " The example is run against PostgreSQL 16 by rowshape's test suite: "+
+			"the first migration must produce %s and the fix must not fail.", e.Code)
+	}
+	fmt.Fprintf(&b, "\n")
 	return b.String()
+}
+
+// writeSQL renders example SQL as one code block per migration file. A fix that
+// spans files ("-- Migration 1", "-- Migration 2") is shown as separate, titled
+// blocks, because the file boundary is a transaction boundary and copying both
+// halves into one file would reintroduce the hazard.
+func writeSQL(b *strings.Builder, sql string) {
+	files := findings.MigrationFiles(sql)
+	for _, f := range files {
+		if len(files) == 1 {
+			fmt.Fprintf(b, "```sql\n%s\n```\n\n", f)
+			continue
+		}
+		title, body, _ := strings.Cut(f, "\n")
+		title = strings.TrimSpace(strings.TrimPrefix(title, "--"))
+		fmt.Fprintf(b, "```sql title=%q\n%s\n```\n\n", title, body)
+	}
+}
+
+// writeFixture renders a fixture collapsed: it is the evidence the example is
+// true, not something every reader needs to read.
+func writeFixture(b *strings.Builder, summary, fx string) {
+	fmt.Fprintf(b, "<details>\n<summary>%s</summary>\n\n```yaml\n%s\n```\n\n</details>\n\n",
+		summary, strings.TrimRight(fx, "\n"))
 }
 
 // namespaceConcern is the one-line description of each finding class, matching

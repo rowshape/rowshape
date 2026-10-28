@@ -6,7 +6,7 @@ sidebar:
 ---
 
 An MCP server the agent never calls is decoration. The bet is the loop, not the
-tool (PRD §15): the win is an agent that checks a migration against production
+tool: the win is an agent that checks a migration against production
 *shape* before it opens a PR, and rewrites it when the verdict says to — with no
 human turn. Two things make that happen: the MCP tools, and getting rowshape into
 the agent's context so it actually reaches for them.
@@ -64,7 +64,9 @@ whole thing closing without a human turn.
 ## The spec is the position
 
 rowshape's fixture format is an open spec anyone can emit, not a private file
-format — that is the strategic claim (PRD §3). It lives in its own repo:
+format. Anything that can read your database's statistics can produce one, and
+anything that reads the format can check a migration against it. It lives in its
+own repo:
 
 - [The Rowshape Fixture Spec (RFC-0001)](https://github.com/rowshape/fixture-spec)
 - [MCPFold](https://github.com/dj-pearson/MCPFold) — the thin-MCP discipline

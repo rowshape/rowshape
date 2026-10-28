@@ -6,6 +6,7 @@ import { unified } from '@astrojs/markdown-remark';
 import { SITE, REPO } from './src/site.ts';
 import { lastmodFor } from './src/lastmod.ts';
 import remarkLinkFindingCodes from './src/plugins/remark-link-finding-codes.mjs';
+import { findingsSidebar } from './src/findingsSidebar.mjs';
 
 // The one place the stack is deliberately not Go (PRD §9). The Go decision was
 // about the binary — single static artifact, no runtime, hydrate is CPU-bound —
@@ -95,13 +96,25 @@ export default defineConfig({
 				// Generated from the cobra tree by `go run ./tools/gencli`, with a
 				// staleness test, so the reference cannot drift from the binary.
 				{ label: 'CLI reference', items: [{ autogenerate: { directory: 'reference' } }] },
-				{ label: 'Findings', items: [{ autogenerate: { directory: 'findings' } }] },
+				// Grouped by namespace and labelled by code; see the helper for why.
+				{ label: 'Findings', items: findingsSidebar() },
 				{ label: 'Privacy', items: [{ autogenerate: { directory: 'privacy' } }] },
 				// What the tool can and cannot know. PRD §14 committed to saying this
 				// in the docs ("Fixture fidelity is a tarpit ... Say so in the docs")
 				// and the page did not exist until CR4-T13.
 				{ label: 'Fidelity', items: [{ autogenerate: { directory: 'fidelity' } }] },
-				{ label: 'Agents & MCP', items: [{ autogenerate: { directory: 'agent' } }] },
+				// Everything that runs rowshape from somewhere else: CI and agents. The
+				// Action page lives under /reference/ (its URL is linked from READMEs
+				// and the Marketplace), so it is a slug item here rather than a moved
+				// file, and gencli marks it hidden so it does not also appear under
+				// CLI reference — it is not a command.
+				{
+					label: 'Integrations',
+					items: [
+						{ slug: 'reference/github-action', label: 'GitHub Action' },
+						{ autogenerate: { directory: 'agent' } },
+					],
+				},
 				{ label: 'Fixture spec', items: [{ autogenerate: { directory: 'spec' } }] },
 				{ label: 'FAQ', items: [{ autogenerate: { directory: 'faq' } }] },
 			],

@@ -163,3 +163,21 @@ func TestApplyConcurrentIndexRunsOutsideTx(t *testing.T) {
 		t.Errorf("concurrent build errored: %s %s", st.ErrCode, st.ErrMsg)
 	}
 }
+
+// TestApplyOtherConcurrentFormsRunOutsideTx: REINDEX CONCURRENTLY and DROP INDEX
+// CONCURRENTLY are refused in a transaction block too. They were wrapped in one,
+// so the safe forms RS-INDEX-020 and RS-INDEX-003 recommend failed with 25001 —
+// including behind a leading comment, which the splitter keeps.
+func TestApplyOtherConcurrentFormsRunOutsideTx(t *testing.T) {
+	conn, ctx := applyConn(t)
+	tbl := freshTable(t, conn, ctx, "id int")
+
+	cap := Apply(ctx, conn, located(
+		"CREATE INDEX idx_"+tbl+" ON "+tbl+" (id)",
+		"-- rebuild without blocking writes\nREINDEX INDEX CONCURRENTLY idx_"+tbl,
+		"DROP INDEX CONCURRENTLY idx_"+tbl,
+	))
+	if !cap.Success {
+		t.Fatalf("CONCURRENTLY forms should succeed outside a tx, got %+v", cap.Statements)
+	}
+}

@@ -22,6 +22,9 @@ func TestClassifyIndexBuild(t *testing.T) {
 		{"CREATE TABLE index_stats (id int)", false, false}, // "INDEX" only in a name
 		{"ALTER TABLE t ADD COLUMN c int", false, false},
 		{"", false, false},
+		// The splitter keeps a leading comment with its statement.
+		{"-- Migration 1\nCREATE INDEX CONCURRENTLY i ON t (c)", true, true},
+		{"/* x */ CREATE INDEX i ON t (c)", true, false},
 	}
 	for _, tc := range cases {
 		gotIdx, gotConc := classifyIndexBuild(tc.sql)
