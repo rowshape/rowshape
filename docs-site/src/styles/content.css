@@ -21,3 +21,22 @@
 	outline: 2px solid var(--sl-color-text-accent);
 	outline-offset: 2px;
 }
+
+/*
+ * Windows High Contrast / forced colors. Expressive Code draws the copy
+ * button's icon as a mask over `background-color`, and forced-colors mode
+ * replaces every background with Canvas — so the icon became a blank square:
+ * a labelled button for screen readers and nothing at all for the sighted
+ * people who turned the mode on to see better. Opting the icon out of the
+ * override and painting it in the system button-text colour restores it in
+ * whatever palette the user chose.
+ */
+@media (forced-colors: active) {
+	:root .expressive-code .copy button::after {
+		forced-color-adjust: none;
+		background-color: ButtonText;
+	}
+	:root .expressive-code .copy button {
+		border: 1px solid ButtonText;
+	}
+}

@@ -971,6 +971,50 @@ async function checkTables(pages) {
 	return problems;
 }
 
+/**
+ * The icon set and the social card's weight.
+ *
+ * /favicon.ico is fetched unprompted — by feed readers, unfurlers, bookmark
+ * sync — whatever the HTML says, so a missing one is a 404 in every log and a
+ * blank tile in every one of those places. The site shipped only Starlight's
+ * placeholder star as an SVG until SITE-7. og.png is downloaded by every link
+ * preview, usually on a phone; palette-encoding took it from 55 KiB to 17, and
+ * 40 KiB is where a truecolour regression would land. The PNG headers are read
+ * by hand, as in checkSocialCard, to keep this script dependency-free.
+ */
+const OG_MAX_BYTES = 40 * 1024;
+
+async function checkIcons() {
+	const problems = [];
+	const ico = join(DIST, 'favicon.ico');
+	if (!existsSync(ico)) problems.push('dist/favicon.ico missing — run `npm run icons` and commit public/favicon.ico');
+	else {
+		const buf = await readFile(ico);
+		// ICONDIR: reserved 0, type 1 (icon), count >= 1; first entry width byte.
+		if (buf.length < 22 || buf.readUInt16LE(0) !== 0 || buf.readUInt16LE(2) !== 1 || buf.readUInt16LE(4) < 1) {
+			problems.push('dist/favicon.ico is not an ICO file');
+		} else if (buf[6] !== 32 || buf[7] !== 32) {
+			problems.push(`dist/favicon.ico first image is ${buf[6] || 256}x${buf[7] || 256}, expected 32x32`);
+		}
+	}
+	const touch = join(DIST, 'apple-touch-icon.png');
+	if (!existsSync(touch)) problems.push('dist/apple-touch-icon.png missing — run `npm run icons`');
+	else {
+		const size = pngSize(await readFile(touch));
+		if (!size || size.width !== 180 || size.height !== 180) problems.push('dist/apple-touch-icon.png is not a 180x180 PNG');
+	}
+	const head = await readFile(join(DIST, 'index.html'), 'utf8');
+	if (!/<link rel="apple-touch-icon" href="\/apple-touch-icon\.png"/.test(head)) {
+		problems.push('homepage does not link apple-touch-icon');
+	}
+	const og = join(DIST, 'og.png');
+	if (existsSync(og)) {
+		const n = (await stat(og)).size;
+		if (n > OG_MAX_BYTES) problems.push(`dist/og.png is ${n} bytes, over ${OG_MAX_BYTES} — palette-encode it (npm run og)`);
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -1002,8 +1046,14 @@ async function main() {
 	const critical = await checkCriticalPath(pages);
 	const selfLinks = await checkSelfLinks(pages);
 	const tables = await checkTables(pages);
+	const icons = await checkIcons();
 
 	let failed = false;
+	if (icons.length) {
+		failed = true;
+		console.error(`${icons.length} icon/social-card problem(s):`);
+		for (const i of icons) console.error(`  ${i}`);
+	}
 	if (tables.length) {
 		failed = true;
 		console.error(`${tables.length} table accessibility problem(s):`);
@@ -1089,7 +1139,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, every table keyboard-scrollable with named headers, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB initial + ${DEFERRED_JS_BUDGET_BYTES / 1024} KiB deferred JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card (under 40 KiB), favicon.ico and touch icon present, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, every table keyboard-scrollable with named headers, noindex only on the 404, no third-party origins, all within the ${JS_BUDGET_BYTES / 1024} KiB initial + ${DEFERRED_JS_BUDGET_BYTES / 1024} KiB deferred JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
 }
 
 await main();
