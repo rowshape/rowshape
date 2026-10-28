@@ -38,11 +38,12 @@
   Cache-Control: public, max-age=31536000, immutable
 
 # Pagefind's file names are only partly hashed: fragment/, index/ and the
-# .pf_meta file are, but pagefind.js, pagefind-entry.json, the wasm.*.pagefind
-# files and the UI bundles are not, and the entry file is what names the hashed
-# ones. Making any of those immutable would pin a visitor to a stale index (and
-# a 404 for the meta file it names) after every deploy. Five minutes caps that
-# window; the hashed files revalidate with a cheap 304, which costs little for a
-# search that loads once per visit.
+# .pf_meta file are, but pagefind.js, pagefind-worker.js, the wasm.*.pagefind
+# files and the UI bundles are not (pagefind-entry.json is fetched with a ?ts=
+# cache-buster, so it is always fresh). The unhashed JS and the wasm must match
+# each other and the index they read; `immutable` on them would pin a returning
+# visitor to last deploy's search runtime against this deploy's index. Five
+# minutes caps that window; the hashed files revalidate with a cheap 304, which
+# costs little for a search that loads once per visit.
 /pagefind/*
   Cache-Control: public, max-age=300

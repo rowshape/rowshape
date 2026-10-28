@@ -10,6 +10,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname, resolve, extname } from 'node:path';
+import { executableInlineScripts, inlineHandlers, scriptHash } from './csp.mjs';
 
 const DIST = 'dist';
 
@@ -964,6 +965,58 @@ async function checkHeaders() {
 	return problems;
 }
 
+/**
+ * The CSP that gen-csp.mjs wrote must allow every inline script dist/ actually
+ * contains. This re-derives the hashes from the built pages rather than trusting
+ * the generator: a page added by a later build step, a generator that silently
+ * skipped a file, or a dist/ built with plain `astro build` (no gen-csp) would
+ * all ship a policy that blocks the theme bootstrap — a broken site that no
+ * build error ever mentions, because the browser reports it only in the
+ * visitor's console.
+ */
+async function checkCSP(pages) {
+	const path = join(DIST, '_headers');
+	if (!existsSync(path)) return []; // checkHeaders already reports this
+	const rules = parseHeadersFile(await readFile(path, 'utf8'));
+	const site = rules.find((r) => r.path === '/*');
+	const problems = [];
+	if (rules.some((r) => r.headers.has('content-security-policy-report-only'))) {
+		problems.push('_headers sets Content-Security-Policy-Report-Only; the policy is verified and meant to be enforced');
+	}
+	const csp = site?.headers.get('content-security-policy');
+	if (!csp) return [...problems, '_headers /* has no Content-Security-Policy — did the build skip scripts/gen-csp.mjs?'];
+	if (csp.length > 1) return [...problems, `_headers /* sets Content-Security-Policy ${csp.length} times; Cloudflare would join them into one invalid header`];
+
+	const directives = new Map(
+		csp[0].split(';').map((d) => d.trim().split(/\s+/)).filter((d) => d[0]).map(([k, ...v]) => [k.toLowerCase(), v])
+	);
+	const scriptSrc = directives.get('script-src') ?? [];
+	// Hashes are worthless next to these: 'unsafe-inline' is ignored when a hash
+	// is present in CSP2+ browsers but honoured by older ones, and 'unsafe-eval'
+	// reopens eval() of strings, which 'wasm-unsafe-eval' exists to avoid.
+	for (const bad of ["'unsafe-inline'", "'unsafe-eval'", '*', 'data:', 'http:', 'https:']) {
+		if (scriptSrc.includes(bad)) problems.push(`CSP script-src allows ${bad}`);
+	}
+	for (const [d, want] of [['object-src', "'none'"], ['frame-ancestors', "'none'"], ['base-uri', "'self'"]]) {
+		if (directives.get(d)?.join(' ') !== want) problems.push(`CSP ${d} is "${directives.get(d)?.join(' ') ?? '(missing)'}", want ${want}`);
+	}
+
+	const allowed = new Set(scriptSrc);
+	const missing = new Map(); // hash -> first page that needs it
+	for (const page of pages) {
+		const html = await readFile(page, 'utf8');
+		for (const body of executableInlineScripts(html)) {
+			const h = scriptHash(body);
+			if (!allowed.has(h) && !missing.has(h)) missing.set(h, page);
+		}
+		for (const h of inlineHandlers(html)) problems.push(`${page}: inline ${h} — CSP blocks it; move it into a script`);
+	}
+	for (const [h, page] of missing) {
+		problems.push(`CSP script-src lacks ${h}, an inline script on ${page} (and maybe others) — the browser will refuse to run it`);
+	}
+	return problems;
+}
+
 async function main() {
 	if (!existsSync(DIST)) {
 		console.error(`no ${DIST}/ — run \`npm run build\` first`);
@@ -994,12 +1047,12 @@ async function main() {
 	const noindex = await checkNoindex(pages);
 	const critical = await checkCriticalPath(pages);
 	const selfLinks = await checkSelfLinks(pages);
-	const security = [...(await checkHeaders())];
+	const security = [...(await checkHeaders()), ...(await checkCSP(pages))];
 
 	let failed = false;
 	if (security.length) {
 		failed = true;
-		console.error(`${security.length} security-header problem(s):`);
+		console.error(`${security.length} security problem(s) (headers, CSP, security.txt):`);
 		for (const s of security) console.error(`  ${s}`);
 	}
 	if (critical.length) {
@@ -1082,7 +1135,7 @@ async function main() {
 	}
 	if (failed) process.exit(1);
 
-	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, security headers and immutable caching in _headers, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
+	console.log(`OK: ${pages.length} pages, no broken internal links, robots.txt advertises a real sitemap, every page carries a real social card, every <title> unique and under 60 chars, every description in range, structured data valid and complete, every sitemap URL dated from git, the catalog links every finding, llms.txt matches the sitemap, headings and link text sound, noindex only on the 404, no third-party origins, security headers and immutable caching in _headers, a CSP that allows every inline script, all within the ${JS_BUDGET_BYTES / 1024} KiB JS and ${CSS_BUDGET_BYTES / 1024} KiB CSS budgets`);
 }
 
 await main();
