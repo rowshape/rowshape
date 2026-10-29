@@ -18,16 +18,81 @@ func TestPageContainsCatalogFields(t *testing.T) {
 	page := Page(e)
 	for _, want := range []string{
 		"title: 'RS-LOCK-001 — a title'",
-		"description: 'one sentence.'", // first sentence only
-		"`RS-LOCK`",                    // namespace
-		"one sentence. two sentence.",  // full summary in the body
-		"## Remediation",
+		"description: " + yamlQuote(pageMetas["RS-LOCK-001"].Description), // tuned for search
+		"seoTitle: " + yamlQuote(pageMetas["RS-LOCK-001"].SEOTitle),
+		"`RS-LOCK`",                   // namespace
+		"one sentence. two sentence.", // full summary in the body
+		"## How to fix",
 		"do the thing",
-		"RFC §9.1",
+		"[Fixture spec §9.1: Extrapolation is model-based, not linear](/spec/)",
 		"rowshape explain RS-LOCK-001",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page missing %q:\n%s", want, page)
+		}
+	}
+	// The internal plan is not published; a reader cannot follow it.
+	if strings.Contains(page, "PRD §") {
+		t.Errorf("page cites the unpublished plan:\n%s", page)
+	}
+}
+
+// TestEveryPageHasTheFixedStructure: every finding page carries the same
+// sections in the same order, so the fix is in the same place on all of them.
+func TestEveryPageHasTheFixedStructure(t *testing.T) {
+	sections := []string{
+		"## What it means\n", "## Why it matters\n", "## Example\n",
+		"```sql\n", "## How to fix\n", "## Related codes\n",
+	}
+	for code, e := range Catalog() {
+		page := Page(e)
+		at := 0
+		for _, s := range sections {
+			i := strings.Index(page[at:], s)
+			if i < 0 {
+				t.Errorf("%s: missing or out of order: %q", code, strings.TrimSpace(s))
+				break
+			}
+			at += i + len(s)
+		}
+		if !strings.Contains(page, "sidebar:\n  label: '"+code+"'\n") {
+			t.Errorf("%s: the sidebar label must be the bare code", code)
+		}
+		if !strings.Contains(page, Prose(e.Remediation)) {
+			t.Errorf("%s: the catalog remediation must appear verbatim", code)
+		}
+		for _, rel := range pageGuides[code].Related {
+			if rel == code {
+				t.Errorf("%s lists itself as related", code)
+			}
+			if _, ok := findings.Explain(rel); !ok {
+				t.Errorf("%s lists unknown related code %s", code, rel)
+			}
+		}
+	}
+}
+
+// TestPageDescriptionFallback: a code with no tuned frontmatter still gets a
+// description — the summary's first sentence — and no seoTitle.
+func TestPageDescriptionFallback(t *testing.T) {
+	page := Page(findings.Explanation{Code: "RS-X-001", Title: "t", Summary: "one sentence. two sentence."})
+	if !strings.Contains(page, "description: 'one sentence.'\n") || strings.Contains(page, "seoTitle:") {
+		t.Errorf("fallback frontmatter wrong:\n%s", page)
+	}
+}
+
+// TestEveryCodeHasTunedMeta: the search-facing title and description are
+// written per code; a new code without them would ship a truncated <title>.
+func TestEveryCodeHasTunedMeta(t *testing.T) {
+	for _, code := range findings.Codes() {
+		m, ok := pageMetas[code]
+		if !ok || m.SEOTitle == "" || m.Description == "" {
+			t.Errorf("%s has no seoTitle/description in pageMetas (meta.go)", code)
+		}
+	}
+	for code := range pageMetas {
+		if _, ok := findings.Explain(code); !ok {
+			t.Errorf("pageMetas has an entry for %s, which is not in the catalog", code)
 		}
 	}
 }

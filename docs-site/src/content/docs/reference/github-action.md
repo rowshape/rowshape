@@ -2,6 +2,7 @@
 title: "The rowshape GitHub Action"
 description: "Run rowshape validate in GitHub Actions and gate a pull request on the verdict, with findings annotated inline on the lines that caused them."
 sidebar:
+  hidden: true
   order: 99
 ---
 
@@ -10,11 +11,12 @@ sidebar:
 Run `rowshape validate` in CI and gate a pull request on the verdict. The Action
 is a **thin wrapper over the released `rowshape` binary** — it adds no finding
 logic and renders the exact same [Verdict](https://github.com/rowshape/rowshape/blob/main/internal/verdict/verdict.go) the
-CLI and MCP server produce (one struct, two marshalers; PRD §10,
-INV-VERDICT-SHAPE). It needs **no production credential**: point it at a
-disposable Postgres and `validate` hydrates a throwaway database from a committed
-fixture, applies the migration, and drops it. It hard-refuses a target whose host
-matches the fixture's source (INV-BLAST-RADIUS-ZERO).
+CLI and MCP server produce — one struct with two marshalers, so the JSON a CI
+step reads and the JSON an agent reads cannot differ. It needs **no production
+credential**: point it at a disposable Postgres and `validate` hydrates a
+throwaway database from a committed fixture, applies the migration, and drops
+it. It hard-refuses a target whose host matches the fixture's source, so a
+misconfigured run cannot touch the production database the fixture came from.
 
 ## Quick start
 
@@ -58,7 +60,7 @@ also fails the job.
 > clear without saying so. rowshape warns on stderr when it connects to a
 > non-loopback host without TLS; use `sslmode=require` or stronger there.
 
-## Exit-code gating (PRD §10)
+## Exit-code gating
 
 | `rowshape validate` | Verdict | Job outcome (default) | With `warn-as-fail: true` |
 | ------------------- | ------- | --------------------- | ------------------------- |
@@ -145,7 +147,7 @@ when `json: false` rather than naming a file that does not exist.
 | `ephemeral`    | ―                  | Admin URL of a disposable Postgres (a CI `services:` container). No production credential. |
 | `target`       | ―                  | Validate against a live DB URL instead of hydrating (its data is ground truth). Mutually exclusive with `ephemeral`. |
 | `warn-as-fail` | `false`            | Fail the job on a WARN-only verdict. |
-| `json`         | `true`             | Capture the machine-readable JSON verdict for a downstream step (e.g. PR annotations, P4-T2). |
+| `json`         | `true`             | Capture the machine-readable JSON verdict for a downstream step (e.g. PR annotations with `rowshape annotate`). |
 | `runner`       | ―                  | Override runner detection. **Only `rawsql` can be validated today** — `alembic`, `prisma` and `drizzle` projects are detected but their migrations cannot yet be captured, and `validate` refuses with a clear error. |
 | `seed`         | ―                  | Deterministic hydration seed. |
 | `scale`        | ―                  | Fraction of declared rows to hydrate (default `1.0`). |

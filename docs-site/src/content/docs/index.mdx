@@ -13,13 +13,149 @@ hero:
     - text: Install
       link: /install/
       icon: right-arrow
+    - text: Quickstart
+      link: /quickstart/
+      variant: secondary
     - text: View on GitHub
       link: https://github.com/rowshape/rowshape
       icon: external
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+{/*
+  The product goes first. The page used to be a hero, an essay and four cards,
+  so a reader had to take the claim on trust before seeing a single migration or
+  verdict. Everything in this section is the repo's own demo (demo/repo/) and
+  the output of an actual run of it — not a mock-up — so the page cannot promise
+  output the binary does not print. If the verdict format changes, re-run the
+  command below and paste the result; do not edit it by hand.
+*/}
+
+## A migration in, a verdict out
+
+```sql title="demo/repo/migrations/naive/001_add_email.sql"
+ALTER TABLE public.users
+  ADD COLUMN email text NOT NULL DEFAULT (gen_random_uuid()::text || '@users.invalid');
+```
+
+The obvious way to add a `NOT NULL` email column, and it passes on any dev
+database. But the demo app's committed fixture says `users` has 5,000,000 rows.
+`rowshape validate` hydrates a disposable Postgres to that shape, applies the
+migration, and reports what happened there:
+
+```text title="Terminal" frame="terminal" wrap
+$ rowshape validate demo/repo/rowshape.yaml --migrations demo/repo/migrations/naive --ephemeral "$PG" --statement-timeout 5m
+[WARN]  WARN  (fixture demo-users)
+
+  !  RS-LOCK-001  ACCESS EXCLUSIVE lock on users, slow rewrite of 5.0M rows
+    at demo/repo/migrations/naive/001_add_email.sql:1
+    ADD COLUMN with a volatile default holds ACCESS EXCLUSIVE and rewrites all 5000000 rows.
+    duration: slow (extrapolated from 5000000 rows in 22736ms, linear model, 5000000 rows declared)
+    rests on: public.users.rows [confidence: exact]
+    fix: Avoid the full-table ACCESS EXCLUSIVE rewrite. For a volatile default: ADD the column nullable with no default, backfill in batches, then attach the default and SET NOT NULL via a validated CHECK. For a type change: add a new column of the target type, backfill it in batches, swap reads/writes, and drop the old column. Each step is online.
+    why: rowshape explain RS-LOCK-001
+
+  !  RS-LOCK-010  This migration takes ACCESS EXCLUSIVE without setting lock_timeout
+    The first locking statement is a ADD COLUMN with a volatile default. With no lock_timeout, a DDL statement that cannot acquire its lock immediately WAITS — and while it waits, every new query on that table queues behind it, because a pending ACCESS EXCLUSIVE request blocks incoming readers too. A migration that is instant in isolation can therefore stall an entire table behind one long-running transaction it happened to collide with. This is a property of the migration as a whole, so no single statement looks wrong.
+    fix: Set a short timeout at the head of the migration: SET lock_timeout = '3s'; so a statement that cannot get its lock fails fast instead of queueing every reader behind it. Pair it with a retry: a failed migration you can re-run is strictly better than a stalled table. For operations that must eventually succeed on a busy table, retry in a loop with backoff rather than raising the timeout. Note that SET LOCAL scopes it to the transaction, which is usually what you want inside a migration.
+    why: rowshape explain RS-LOCK-010
+
+duration: 23101ms
+```
+
+The exit code is `2`: WARN, a migration that works and costs something worth
+knowing — here, every write to `users` blocked for the length of the rewrite.
+Rewrite it as the three online steps RS-LOCK-001 names
+([`demo/repo/migrations/rewrite/`](https://github.com/rowshape/rowshape/tree/main/demo/repo/migrations/rewrite))
+and the same command returns:
+
+```text title="Terminal" frame="terminal"
+[PASS]  PASS  (fixture demo-users)
+  no findings
+```
+
+## How it works
+
+<Steps>
+
+1. **`rowshape pull`** reads the shape of your database through catalog views
+   only — never `SELECT *` on a user table — with a read-only role, and writes
+   `rowshape.yaml`: row counts, null fractions, cardinality, fan-out. Statistics,
+   no rows. You commit it.
+
+2. **`rowshape hydrate`** rebuilds a disposable Postgres from that file, with
+   synthesized rows whose shape matches production. The same fixture, `--seed`
+   and engine version produce the same data on any machine.
+
+3. **`rowshape validate`** applies your migration to the hydrated copy, captures
+   what happened — locks, durations, rows touched, constraint violations — and
+   returns PASS, WARN or FAIL with exit code `0`, `2` or `1` (`3` when it could
+   not decide). With `--ephemeral` it does the hydrate step itself and drops the
+   database afterwards.
+
+</Steps>
+
+## Run it where you work
+
+<Tabs>
+<TabItem label="CLI">
+
+```sh
+# Read the shape (read-only role) and commit it: it contains no rows.
+rowshape pull "$DATABASE_URL" -o rowshape.yaml
+git add rowshape.yaml
+
+# Check a migration against it in a throwaway database.
+rowshape validate rowshape.yaml -m migrations/ --ephemeral "$SCRATCH_PG"
+```
+
+The [quickstart](/quickstart/) walks through it end to end; every flag is in the
+[CLI reference](/reference/).
+
+</TabItem>
+<TabItem label="GitHub Action">
+
+```yaml
+- uses: rowshape/rowshape@v1
+  with:
+    fixture: rowshape.yaml
+    migrations: migrations/
+    # A `services: postgres` container in the same job.
+    ephemeral: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+```
+
+FAIL fails the job; WARN passes unless `warn-as-fail: true`. Findings land as
+annotations on the lines that caused them. See the
+[GitHub Action reference](/reference/github-action/).
+
+</TabItem>
+<TabItem label="MCP">
+
+```sh
+rowshape init --agent
+```
+
+Registers `rowshape mcp` in your agent's MCP config, writes a versioned agent
+rule, and adds a pre-commit hook in a git repo. The config entry it writes:
+
+```json title=".mcp.json"
+{
+  "mcpServers": {
+    "rowshape": {
+      "args": ["mcp"],
+      "command": "rowshape"
+    }
+  }
+}
+```
+
+The agent gets four tools — `describe_shape`, `validate_migration`,
+`explain_finding`, `plan_against`. See [MCP tools](/agent/mcp/).
+
+</TabItem>
+</Tabs>
 
 ## The problem
 

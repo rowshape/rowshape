@@ -66,7 +66,7 @@ func TestEveryCodeHasMatchingPage(t *testing.T) {
 			t.Errorf("code %s has no catalog page at %s", code, page)
 			continue
 		}
-		if !strings.Contains(string(body), e.Remediation) {
+		if !strings.Contains(string(body), findingsdoc.Prose(e.Remediation)) {
 			t.Errorf("catalog page for %s does not contain the explain remediation verbatim", code)
 		}
 	}

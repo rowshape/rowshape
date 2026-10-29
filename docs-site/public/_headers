@@ -1,0 +1,49 @@
+# Response headers for Cloudflare Pages. Copied verbatim into dist/ by Astro;
+# scripts/gen-csp.mjs then appends the Content-Security-Policy to the /* block
+# after the build, because the CSP's script hashes only exist once dist/ does.
+#
+# Cloudflare semantics that shape this file:
+# - Every rule whose path matches a request applies, and a header set by two
+#   matching rules is JOINED with a comma, not overridden. So no header is set in
+#   both /* and a narrower rule: Cache-Control lives only in the narrow rules,
+#   and the security headers only in /*.
+# - `! Header-Name` in a narrower rule detaches a header set by a broader one.
+#   Nothing here needs it yet.
+# - At most 100 rules, and a header line at most 2,000 characters.
+#   scripts/check-build.mjs fails the build on either.
+# - Comments stay at column 0, above a rule, never between its header lines.
+#
+# /* — every response:
+# - HSTS for a year, subdomains included. No `preload`: preload is a commitment
+#   to the browser vendors' hardcoded list that takes months to undo, worth making
+#   only once every subdomain of rowshape.com is known to serve HTTPS.
+# - Permissions-Policy: a docs site uses none of these. Denying them means an
+#   injected script or a compromised dependency cannot prompt a visitor for them
+#   under our origin.
+# - X-Frame-Options is superseded by the CSP's frame-ancestors 'none' in every
+#   current browser; kept for the ones that predate it.
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  X-Frame-Options: DENY
+  Cross-Origin-Opener-Policy: same-origin
+
+# Vite names everything here after a hash of its content (and Expressive Code's
+# ec.*.css/js after its own 5-character one), so a changed file is a new URL and
+# a URL never changes meaning. That is the only condition under which `immutable`
+# is safe; check-build fails if any file here lacks a hash in its name.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Pagefind's file names are only partly hashed: fragment/, index/ and the
+# .pf_meta file are, but pagefind.js, pagefind-worker.js, the wasm.*.pagefind
+# files and the UI bundles are not (pagefind-entry.json is fetched with a ?ts=
+# cache-buster, so it is always fresh). The unhashed JS and the wasm must match
+# each other and the index they read; `immutable` on them would pin a returning
+# visitor to last deploy's search runtime against this deploy's index. Five
+# minutes caps that window; the hashed files revalidate with a cheap 304, which
+# costs little for a search that loads once per visit.
+/pagefind/*
+  Cache-Control: public, max-age=300

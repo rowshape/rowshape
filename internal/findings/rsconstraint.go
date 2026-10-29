@@ -40,8 +40,20 @@ func (rsConstraint) Analyze(f *fixture.Fixture, c *validate.Capture) []verdict.F
 	var out []verdict.Finding
 	notValidAdds := map[string]addInfo{} // upper(constraint name) -> add
 	epoch := 0                           // transaction epoch: increments on each COMMIT/ROLLBACK
+	file := ""
 
 	for i, st := range c.Statements {
+		// A new migration file is a new transaction: every runner that wraps
+		// migrations wraps them per file. Without this, the fix this finding
+		// recommends — NOT VALID in one migration, VALIDATE in the next — was
+		// itself reported as RS-CONSTRAINT-001 when both files were validated
+		// together, because only an explicit COMMIT advanced the epoch.
+		if st.File != file {
+			if file != "" {
+				epoch++
+			}
+			file = st.File
+		}
 		clean := collapseSpaces(stripSQLComments(st.SQL))
 		upper := strings.ToUpper(clean)
 
