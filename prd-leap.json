@@ -1,0 +1,704 @@
+{
+  "project": "Rowshape",
+  "branchName": "develop",
+  "description": "LEAP: 20 competition-beating bets from the 2026-11-06 multi-agent pass. Thesis: Rowshape is the only tool in this set that runs a migration against a committed, value-free production shape (pgfence, Squawk and MigrationPilot are static, and MigrationPilot admits it cannot say 'this takes 40 minutes' without a live database). These stories turn that execution into things a linter can't copy: re-validated rewrites, a gate tied to the hash of the exact SQL, measured lock queues, measured WAL volume, replaying the queries the deployed app runs, upgrade rehearsals, and executed rollbacks. They also take away the two adoption blockers, Docker and narrow runner coverage, and push the fixture format and the corpus out as the category's standard. I checked every story against prd.json (166 tasks across 15 phases), seo-prd.json, site-prd.json, PRD-rowshape-v1.md, RFC-0001, docs/DECISIONS.md and the code under C:/Users/pears/wt-leap/rowshape.\n\nI replaced 5 of the 20 drafted stories:\n- **Draft LEAP-006, branch interop, was already planned.** PRD §15 says `--target $NEON_BRANCH_URL` should work on day one. It does, through the Provided target and P2-T15. The fidelity half is CR4-T13.\n- **Draft LEAP-019, the agent benchmark, was already planned.** It is P4-T8 plus the open live-runner decision in CR5-T3. Its publishing half moved into LEAP-014.\n- **Draft LEAP-020, the cookbook, was largely built.** internal/findings/examples.go holds a failing and a fixed migration for each code, and TestFindingExamples executes every pair. SITE-12 and SEO-7 already publish them on all 27 finding pages.\n- **Draft LEAP-004, the share card, was polish.** It only re-renders the existing Result. The self-contained report folded into LEAP-008.\n- **Draft LEAP-009, demand capture, was polish.** It is S-sized ops work, and P5-T7 already defines how the gate is measured.\n\nThe five new stories are: a Docker-free disposable Postgres for cloud agent sandboxes, a lock-queue measurement under concurrent load, replaying the deployed app's queries against the migrated schema, SQL-file runners (Flyway, goose, golang-migrate, dbmate), and executed rollback rehearsal.\n\nFixed in place:\n- **Paths.** Analyzers and the registry live in internal/findings, not internal/validate. The corpus has 40 cases, not 41. The fixture already carries generated_at, so freshness is computable.\n- **Overstated dependencies.** CR3-T10 already fixed the registry; only the deep copy is left. CR2-T23 means only rawsql can be validated today, so the gate, audit and runner stories say so and depend on it.\n- **Competitor claims.** I checked these against live pages: pgfence's static --fix, its LSP quick fixes and its private governance program; Squawk's gitlab reporter, LSP and WASM playground, and that it has no SARIF output; MigrationPilot's fail-open PreToolUse hook and its lack of hash binding. Every rationale now cites only what those pages say.\n- **Schema.** All 20 stories now use the repo's own task schema (id, title, description, depends_on, spec_refs, acceptance_criteria, verification, artifacts, type, passes, status, priority, note), not the draft's camelCase fields.\n\nEvery story stays local and free and keeps `validate` ungated (INV-NEVER-GATE-VALIDATE), and none pays off until P0-T4 ships a release. CR2-T23, which leaves 3 of the 4 advertised runners unable to validate anything, is a bigger adoption blocker than any LEAP story. It should be decided first.",
+  "userStories": [
+    {
+      "id": "LEAP-001",
+      "title": "rowshape fix: rewrites that are re-validated against the fixture before they are offered",
+      "description": "A developer or agent whose migration returns FAIL gets a rewritten migration (expand/backfill/contract, CONCURRENTLY, NOT VALID then VALIDATE, batched backfill), and Rowshape re-runs it against the hydrated fixture before showing it, so the offered rewrite has already reached PASS or a stated WARN. pgfence's --fix and --fix --split apply mechanical SQL rewrites from an allowlist without touching data. Rowshape can prove the rewrite against production shape. The per-code Fixed pairs in internal/findings/examples.go are already executed by TestFindingExamples. This story generalises them from fixed examples to the user's own SQL.",
+      "depends_on": [
+        "P0-T4",
+        "MERGE-T5"
+      ],
+      "spec_refs": [
+        "PRD §10 (remediation is mandatory)",
+        "RFC §7.4 (confidence capping)",
+        "INV-DETERMINISM",
+        "INV-NEVER-GATE-VALIDATE"
+      ],
+      "acceptance_criteria": [
+        "A new package internal/rewrite maps at least RS-LOCK-001, RS-INDEX-001, RS-CONSTRAINT-001 and RS-PERF-010 to a deterministic rewrite. Rewrites live in a table keyed by finding code from internal/findings/registry.go, not in a switch spread across analyzers.",
+        "`rowshape fix <migration>` (cmd/fix.go) writes the rewrite to a sibling file, never overwrites the input, re-runs the validate pipeline on it, and prints the before and after verdicts.",
+        "A rewrite is emitted only when its own verdict is PASS, or WARN with no error-severity finding. Otherwise fix exits non-zero and names the finding it could not repair.",
+        "validate_migration gains an optional propose_fix boolean instead of a new tool, and cmd/mcp/schema_budget_test.go still passes at its current budget.",
+        "Every corpus case whose code has a rewrite gains an expected_fix.sql, asserted byte-for-byte across the corpus PG version matrix.",
+        "Two runs with the same --seed over the same fixture produce identical rewrite bytes."
+      ],
+      "verification": [
+        "go test ./internal/rewrite/... ./cmd/...",
+        "corpus harness asserts expected_fix.sql on every supported major",
+        "Mutation: break one rewrite so it still FAILs and assert fix exits non-zero instead of emitting it"
+      ],
+      "artifacts": [
+        "internal/rewrite/",
+        "cmd/fix.go",
+        "corpus/cases/*/expected_fix.sql",
+        "cmd/mcp/tool_validate_migration.go"
+      ],
+      "type": "code",
+      "passes": false,
+      "status": "todo",
+      "priority": 1,
+      "note": "Competitive rationale: pgfence's fixes are static rewrites applied without a database (https://pgfence.pages.dev/). MigrationPilot cannot estimate lock duration without a connection (https://dev.to/mickelsamuel/your-ai-agent-writes-migrations-that-look-safe-heres-what-they-actually-do-to-postgres-27a7). Size: L. Success metric: share of corpus FAIL cases where fix produces a PASS rewrite (target >=70%). Committing batched backfills wait on MERGE-T5."
+    },
+    {
+      "id": "LEAP-002",
+      "title": "Hash-bound agent gate: block a migration apply unless a non-FAIL verdict exists for those exact bytes and that fixture",
+      "description": "Platform leads get a local guarantee that a coding agent cannot run supabase db push, psql -f or a raw-SQL apply command on a migration unless Rowshape issued a verdict whose subject matches those exact migration bytes and the current fixture digest. Verdicts already carry that subject (INV-DSSE-SHAPE), and CR2-T19 normalises line endings before hashing, so the binding comes from data Rowshape already emits. MigrationPilot's Claude Code PreToolUse hook fails open by design, and its author says approvals are not bound to a hash of the SQL. P3-T10's pre-commit hook guards commits; this guards the apply.",
+      "depends_on": [
+        "P3-T10",
+        "CR2-T19",
+        "CR5-T4"
+      ],
+      "spec_refs": [
+        "PRD §8.3 (backstop for when the agent ignores the rule)",
+        "PRD §9.1 (subject = fixture + migration digests)",
+        "INV-DSSE-SHAPE"
+      ],
+      "acceptance_criteria": [
+        "`rowshape init --agent --gate` installs a Claude Code PreToolUse hook entry, and the Cursor equivalent where its hook API exists, that runs `rowshape gate check -- <command>`.",
+        "cmd/gate.go recognises apply commands through a declared table in internal/runner (supabase db push, psql -f, plus each runner validate can capture) and resolves the migration files each would apply.",
+        "Validate persists each verdict under .rowshape/verdicts/<subject-digest>.json. gate check passes only when a non-FAIL verdict's subject equals the current migration digests plus fixture digest.",
+        "Prisma, Drizzle and Alembic apply commands are blocked with a message citing CR2-T23, never passed through silently.",
+        "The gate fails closed by default. --fail-open is an explicit flag recorded in the hook config, and every block message prints the exact `rowshape validate` command that would unblock it.",
+        "A test edits one byte of a validated migration and asserts the gate blocks. A CRLF-only edit does not block.",
+        "Hook install is atomic and never replaces a customised entry (shares the CR5-T4 merge logic)."
+      ],
+      "verification": [
+        "go test ./cmd/... ./internal/runner/...",
+        "End-to-end: validate, edit one byte, assert the gate blocks; re-validate, assert it passes"
+      ],
+      "artifacts": [
+        "cmd/gate.go",
+        "cmd/init_agent_hook.go",
+        "internal/runner/apply_commands.go"
+      ],
+      "type": "code",
+      "passes": false,
+      "status": "todo",
+      "priority": 2,
+      "note": "Competitive rationale: MigrationPilot's hook fails open and is not hash-bound (https://dev.to/mickelsamuel/your-ai-agent-writes-migrations-that-look-safe-heres-what-they-actually-do-to-postgres-27a7). Size: M. Success metric: gate installs per init --agent run. This is the local lead-in to P5-T12's CI-OIDC attestation; laptop verdicts stay unattested."
+    },
+    {
+      "id": "LEAP-003",
+      "title": "Docker-free disposable Postgres so validate runs in cloud agent sandboxes",
+      "description": "internal/target drives the docker CLI directly (D-005, OQ-TARGET), so validate is a tool error on any machine without a Docker daemon. That includes the hosted sandboxes where coding agents increasingly run. A second disposable target backend runs version-pinned, checksum-verified Postgres binaries as a local process in a temp directory. The agent loop then closes wherever the agent runs, which is where the wedge is (PRD §15: the bet is the loop). No rival is exposed to this gap the same way, because none of them executes.",
+      "depends_on": [
+        "P0-T5"
+      ],
+      "spec_refs": [
+        "OQ-TARGET (resolved to docker CLI; this adds a fallback, not a replacement)",
+        "INV-BLAST-RADIUS-ZERO",
+        "INV-SUPPLY-CHAIN"
+      ],
+      "acceptance_criteria": [
+        "internal/target gains an embedded backend implementing the same interface as Ephemeral. It is selected by --target-backend embedded or automatically when the docker probe fails, and the verdict records which backend ran.",
+        "Postgres binaries are fetched for the requested major, verified against sha256 sums pinned in the repo, and cached. A checksum mismatch is a tool error (exit 3), never a fallback to an unverified binary.",
+        "The process binds a unix socket or 127.0.0.1 on a random port with a generated password, and teardown removes the data directory on success, error and SIGINT (reuses the CR3-T3 cancellation test shape).",
+        "The corpus harness runs green on the embedded backend for at least two supported majors, in a CI job with Docker removed.",
+        "When neither backend is available, validate reports one clear toolerror naming both."
+      ],
+      "verification": [
+        "go test ./internal/target/... in a job without docker",
+        "Corpus run on the embedded backend",
+        "Tamper test: corrupt a cached binary and assert exit 3"
+      ],
+      "artifacts": [
+        "internal/target/embedded.go",
+        "internal/target/pgbinaries.sums"
+      ],
+      "type": "code",
+      "passes": false,
+      "status": "todo",
+      "priority": 3,
+      "note": "Rationale: MigrationPilot and pgfence need no database at all, so a Docker requirement is the one place Rowshape is harder to adopt than they are. Size: L. Success metric: share of validate runs on the embedded backend, and the P4-T6 demo reproduced in a hosted agent sandbox."
+    },
+    {
+      "id": "LEAP-004",
+      "title": "Supabase as the first ICP: native layout, managed-schema handling and a dogfood case study",
+      "description": "Supabase users write plain SQL into supabase/migrations, often agent-generated, and that SQL already goes through the rawsql path, the only runner validate can capture today (CR2-T23). Make Rowshape work out of the box for them. init detects the Supabase CLI layout. pull marks Supabase-managed schemas instead of profiling them. hydrate stubs auth/storage so migrations referencing auth.users don't false-FAIL. A case study run on portfolio Supabase stacks publishes real verdicts.",
+      "depends_on": [
+        "P0-T4"
+      ],
+      "spec_refs": [
+        "PRD §5 (personas)",
+        "RFC §8 (privacy)",
+        "INV-NO-ROWS"
+      ],
+      "acceptance_criteria": [
+        "internal/runner/detect.go detects supabase/config.toml plus supabase/migrations/*.sql as a supabase runner that applies through rawsql in timestamp order, covered in detect_test.go.",
+        "cmd/init_detect.go prints a Supabase next-steps block with the session-pooler DSN shape and no secret values.",
+        "pull records auth, storage, realtime, graphql and supabase_functions as managed, with structure only and no column profiles. A Supabase-shaped fixture is added under test/.",
+        "hydrate creates stub managed schemas so a migration with a foreign key to auth.users hydrates without a false FAIL. A test proves it.",
+        "Three anonymised corpus cases derived from real Supabase migrations land with expected.json.",
+        "docs-site/src/content/docs/guides/supabase.md publishes the case study with verdicts pasted from tool output."
+      ],
+      "verification": [
+        "go test ./internal/runner/... ./internal/profile/... ./internal/hydrate/...",
+        "fixture.Leaks returns nothing on the Supabase test fixture"
+      ],
+      "artifacts": [
+        "internal/runner/detect.go",
+        "cmd/init_detect.go",
+        "docs-site/src/content/docs/guides/supabase.md",
+        "corpus/cases/supabase-*"
+      ],
+      "type": "code/asset",
+      "passes": false,
+      "status": "todo",
+      "priority": 4,
+      "note": "Rationale: no competitor named in the PRD targets Supabase's migration layout. Size: M. Success metric: at least 2 unsolicited Supabase issues within 30 days of release."
+    },
+    {
+      "id": "LEAP-005",
+      "title": "Lock-queue measurement: run the migration under concurrent synthetic load and report real waits and pile-ups",
+      "description": "The classic outage isn't the DDL's own duration. It's the queue: an ALTER waits behind a long transaction, and every read and write queues behind the ALTER. RS-LOCK-010 flags a missing lock_timeout statically, but nothing measures the queue. During validate, Rowshape starts background sessions on the hydrated database (a long reader plus a steady read/write mix on the touched tables) and samples pg_locks and pg_stat_activity while the migration runs. It reports the measured wait, the depth of the blocked queue, and whether lock_timeout would have fired. A static linter can't produce this.",
+      "depends_on": [
+        "P2-T8",
+        "CR2-T9"
+      ],
+      "spec_refs": [
+        "PRD §10 (RS-LOCK)",
+        "RFC §7.4",
+        "INV-DURATIONS-BUCKETS",
+        "INV-VERDICT-STABLE"
+      ],
+      "acceptance_criteria": [
+        "validate --contention (off by default in this story, so verdict bytes are unchanged without it) runs N background sessions from a declared profile in internal/validate and samples pg_locks and pg_stat_activity at a fixed interval.",
+        "A new RS-LOCK code (registered in internal/findings/registry.go with a generated docs page and mandatory remediation) reports blocked-queue depth and wait duration as buckets.",
+        "When the migration sets lock_timeout, the finding states whether it would have fired under the measured wait.",
+        "Measurements are bucketed, and two runs with the same --seed yield the same verdict bytes.",
+        "Two corpus cases: one where a long reader turns a sub-second ALTER into a queue, and one where lock_timeout plus a retry avoids it."
+      ],
+      "verification": [
+        "go test ./internal/validate/... ./internal/findings/...",
+        "Corpus cases pass across the PG matrix"
+      ],
+      "artifacts": [
+        "internal/validate/contention.go",
+        "internal/findings/rslock.go",
+        "corpus/cases/lock-queue-*"
+      ],
+      "type": "code/asset",
+      "passes": false,
+      "status": "todo",
+      "priority": 5,
+      "note": "Rationale: Squawk, pgfence and MigrationPilot all analyse statements without running them under load (https://pgfence.pages.dev/, https://github.com/sbdchd/squawk). Size: L. Success metric: queue findings fired per 100 validates, and one published case where it caught a migration whose lock alone looked safe. LEAP-006's workload section can replace the declared profile later."
+    },
+    {
+      "id": "LEAP-006",
+      "title": "Resolve OQ-PGSS by choice: capture a value-free workload summary and join lock findings to the queries they stall",
+      "description": "OQ-PGSS was 'decided by omission, not by choice': pg_stat_statements appears nowhere in the code. Decide it. pull captures an optional, value-free workload section (statement fingerprint hash, relations touched, required lock mode, call-rate bucket), and lock findings gain an impact field listing which hot fingerprints they would block. 'Blocks the top SELECT on users at roughly 1k calls/s for 30-60s' tells you the blast radius in a way a lock duration doesn't. MigrationPilot reads pg_stat_statements only over a live connection and does not execute. Rowshape would ship it committed and offline.",
+      "depends_on": [
+        "P2-T8"
+      ],
+      "spec_refs": [
+        "OQ-PGSS / PRD §17.1",
+        "RFC §3.3 (size budget)",
+        "RFC §8 (privacy)",
+        "INV-NO-ROWS"
+      ],
+      "acceptance_criteria": [
+        "OQ-PGSS in prd.json open_decisions is recorded as decided, with this story as its rationale.",
+        "pull adds an optional workload section; fixture-spec/schema/rowshape.schema.json and RFC-0001 gain the vocabulary under a minor version. No query text, literals or comments are stored, and fixture.Leaks enumerates the new fields.",
+        "When the extension is absent or unreadable, pull writes `workload: unavailable (<reason>)`, never an empty list.",
+        "Lock findings in internal/findings gain an impact field listing blocked fingerprints and summed rate buckets, capped to estimated by verdict.Cap.",
+        "The PR-T12 fixture size-budget test covers a workload section pulled from a 5,000-statement source.",
+        "fixture-spec/conformance gains fixtures with and without the section."
+      ],
+      "verification": [
+        "go test ./internal/profile/... ./internal/findings/... ./fixture-spec/...",
+        "Conformance suite passes on both new fixtures"
+      ],
+      "artifacts": [
+        "internal/profile/workload.go",
+        "fixture-spec/schema/rowshape.schema.json",
+        "RFC-0001-rowshape-fixture-spec.md",
+        "prd.json open_decisions"
+      ],
+      "type": "code/spec",
+      "passes": false,
+      "status": "todo",
+      "priority": 6,
+      "note": "Competitive rationale: MigrationPilot's --database-url reads pg_stat_statements live (https://dev.to/mickelsamuel/your-ai-agent-writes-migrations-that-look-safe-heres-what-they-actually-do-to-postgres-27a7). Size: L. Success metric: share of pulls with a workload section present."
+    },
+    {
+      "id": "LEAP-007",
+      "title": "Running-code compatibility replay: execute the deployed app's normalized statements against the migrated sandbox",
+      "description": "During a rolling deploy, the old app version runs against the new schema. RS-DEPLOY-001..003 detect rename and ordering hazards from the SQL alone. This story proves the breakage. With an opt-in, scrubbed set of normalized statements from pg_stat_statements (parameters only, no literals or comments), validate prepares each one against the post-migration schema. Statements that stop planning are reported, along with the migration statement that broke them. It answers 'will production error the moment this applies' with an executed result. No competitor named in the PRD has the data to try.",
+      "depends_on": [
+        "LEAP-006",
+        "P2-T7"
+      ],
+      "spec_refs": [
+        "PRD §10 (RS-DEPLOY)",
+        "RFC §8 (privacy)",
+        "INV-NO-ROWS"
+      ],
+      "acceptance_criteria": [
+        "pull --workload-statements stores normalized statement text only after a scrubber strips comments and rejects any statement still holding a literal. Rejected statements are counted and reported, never stored.",
+        "fixture.Leaks and `inspect --leaks` enumerate the stored statements, and a test feeds a sqlcommenter-tagged statement and asserts the tag is gone.",
+        "After applying the migration, validate runs PREPARE (never EXECUTE) for each stored statement and maps each failure SQLSTATE to the migration statement responsible.",
+        "A new RS-DEPLOY code with mandatory remediation (expand/contract ordering) is registered with a generated docs page.",
+        "A corpus case: RENAME COLUMN breaks a stored SELECT. The expand/contract version passes."
+      ],
+      "verification": [
+        "go test ./internal/profile/... ./internal/validate/... ./internal/findings/...",
+        "Corpus case passes across the PG matrix"
+      ],
+      "artifacts": [
+        "internal/profile/statements.go",
+        "internal/validate/replay.go",
+        "internal/findings/rsdeploy.go"
+      ],
+      "type": "code/asset",
+      "passes": false,
+      "status": "todo",
+      "priority": 7,
+      "note": "Rationale: static rename detection can't tell whether a running query actually depends on the renamed column. Size: L. Success metric: deploy-compatibility findings per 100 validates on fixtures that include statements."
+    },
+    {
+      "id": "LEAP-008",
+      "title": "rowshape audit-history: replay a repo's past migrations against the fixture and publish a self-contained risk report",
+      "description": "One command ranks a repo's whole migration history by what it would have done at today's production shape: ACCESS EXCLUSIVE over large tables, table rewrites, irreversible drops. That 'you got lucky N times' document sells adoption to a team and gives a platform lead something for a budget conversation. The report is a self-contained HTML page plus Markdown, with no network fetches and no values. That absorbs the drafted share-card idea into something with its own substance.",
+      "depends_on": [
+        "P2-T7",
+        "CR2-T23"
+      ],
+      "spec_refs": [
+        "PRD §5 (Priya)",
+        "INV-BLAST-RADIUS-ZERO",
+        "INV-NO-ROWS"
+      ],
+      "acceptance_criteria": [
+        "cmd/audit.go walks the detected migrations in apply order in one disposable database, validating each step incrementally. Runners validate cannot capture are refused up front, citing CR2-T23.",
+        "Output is JSON, Markdown and a self-contained report.html (no external fonts or scripts), ranking migrations by worst severity and estimated lock-duration bucket, each with its file path.",
+        "A migration that fails to apply in sequence is reported as unverifiable with its SQLSTATE, never skipped.",
+        "--since <ref> and --limit N bound the walk; the default cap is 200 and the output says so.",
+        "A test runs the INV-NO-ROWS checks over report.html, and a golden-file test pins its bytes for one fixture."
+      ],
+      "verification": [
+        "go test ./cmd/... ./internal/report/...",
+        "Run over the demo repo and the corpus, recording runtime in a test"
+      ],
+      "artifacts": [
+        "cmd/audit.go",
+        "internal/report/"
+      ],
+      "type": "code",
+      "passes": false,
+      "status": "todo",
+      "priority": 8,
+      "note": "Rationale: static linters can check old files, but without volume they can't rank them by what they would cost today. Size: M. Success metric: audit reports cited in inbound issues or design-partner conversations."
+    },
+    {
+      "id": "LEAP-009",
+      "title": "WAL volume and replica-lag findings measured during validate",
+      "description": "A backfill can finish without a long lock and still hurt production by flooding WAL: replicas lag, logical slots bloat and PITR windows grow. Rowshape can measure WAL bytes per statement on the hydrated database (an LSN diff) and extrapolate to fixture scale with the existing version-conditional models. A tool that never executes can't produce this number.",
+      "depends_on": [
+        "P2-T5",
+        "CR4-T6"
+      ],
+      "spec_refs": [
+        "RFC §7.4",
+        "RFC §9.1 (version-conditional models)",
+        "INV-DURATIONS-BUCKETS",
+        "INV-VERDICT-STABLE"
+      ],
+      "acceptance_criteria": [
+        "internal/validate records pg_current_wal_lsn before and after each statement (pg_current_xlog_location on PG 10 is not needed: PG 10 already uses the wal names) and reports WAL bytes per statement.",
+        "internal/estimate extrapolates WAL to fixture scale, capped by verdict.Cap.",
+        "A new RS-WAL family (registered in internal/findings/registry.go with generated docs pages and mandatory remediation: batching, throttled backfill) reports high WAL volume as buckets.",
+        "An optional replica-throughput field captured by pull from pg_stat_replication enables an estimated-lag finding. When it is absent, the lag finding is suppressed with a stated reason.",
+        "Backfill corpus cases with expected WAL buckets pass across the PG matrix."
+      ],
+      "verification": [
+        "go test ./internal/validate/... ./internal/estimate/... ./internal/findings/..."
+      ],
+      "artifacts": [
+        "internal/findings/rswal.go",
+        "internal/estimate/models.go"
+      ],
+      "type": "code/asset",
+      "passes": false,
+      "status": "todo",
+      "priority": 9,
+      "note": "Rationale: lock-only analysis rates a large unbatched UPDATE on a lightly read table as low risk. Size: M. Success metric: one published case where RS-WAL caught a backfill that lock analysis rated safe."
+    },
+    {
+      "id": "LEAP-010",
+      "title": "Postgres major-version upgrade rehearsal against the fixture",
+      "description": "Major upgrades are the migration platform leads fear most: removed features, extension incompatibilities and collation-driven reindexes. Rowshape already hydrates deterministically on every supported major (D-022, PR-T14). `rowshape validate --upgrade-to <major>` hydrates the fixture on the source major, upgrades it in disposable containers, and reports what breaks plus reindex cost at fixture scale. It's a second wedge aimed straight at the platform-lead buyer.",
+      "depends_on": [
+        "P2-T13",
+        "PR-T14"
+      ],
+      "spec_refs": [
+        "D-022 (supported majors)",
+        "RFC §7.4",
+        "INV-BLAST-RADIUS-ZERO"
+      ],
+      "acceptance_criteria": [
+        "internal/upgrade drives pg_upgrade (dump/restore fallback) between disposable containers via internal/target/container.go and never touches a source host.",
+        "A new RS-UPGRADE family (extension unavailable on target, removed feature used, collation reindex required, changed default) is registered with generated docs pages.",
+        "Reindex cost for collation-sensitive indexes is extrapolated from fixture row counts and capped by verdict.Cap.",
+        "Version pairs outside the D-022 supported set are refused with a toolerror.",
+        "At least 6 upgrade corpus cases run in the matrix."
+      ],
+      "verification": [
+        "go test ./internal/upgrade/...",
+        "Upgrade corpus job green"
+      ],
+      "artifacts": [
+        "internal/upgrade/",
+        "internal/findings/rsupgrade.go",
+        "corpus/cases/upgrade-*"
+      ],
+      "type": "code/asset",
+      "passes": false,
+      "status": "todo",
+      "priority": 10,
+      "note": "Rationale: pgfence and Squawk cover schema-change files only (https://pgfence.pages.dev/, https://github.com/sbdchd/squawk). Size: L. Success metric: upgrade runs as a share of validates, and design-partner leads that cite upgrades."
+    },
+    {
+      "id": "LEAP-011",
+      "title": "SQL-file runners without shell-outs: Flyway, goose, golang-migrate and dbmate",
+      "description": "Only rawsql can be validated today (CR2-T23). Flyway (V<n>__*.sql), goose (-- +goose Up/Down), golang-migrate (*.up.sql/*.down.sql) and dbmate (-- migrate:up/down) are all SQL files with an ordering convention, so they can go through the rawsql capture path with no tool shell-out and no new supply chain. Covering them roughly multiplies the population validate actually serves, including the Go ecosystem the PRD names as the category's home.",
+      "depends_on": [
+        "P2-T6"
+      ],
+      "spec_refs": [
+        "PRD §8.1 (runner detection)",
+        "PRD §4 (native dialect of the category is Go)"
+      ],
+      "acceptance_criteria": [
+        "internal/runner gains flyway, goose, migrate and dbmate detectors that resolve apply order and extract the up half of each file, each covered in detect_test.go.",
+        "Each new runner is captured through the rawsql path; validate succeeds on a fixture project for each, proven by a test.",
+        "Ordering ambiguities (duplicate versions, out-of-order files) are tool errors that name the files involved.",
+        "init's next-steps output, the --runner help, action.yml's runner input and docs/action.md list the new runners.",
+        "The pre-commit migrationPattern in cmd/init_agent_hook.go covers each runner's layout."
+      ],
+      "verification": [
+        "go test ./internal/runner/... ./cmd/...",
+        "Corpus case per runner"
+      ],
+      "artifacts": [
+        "internal/runner/flyway.go",
+        "internal/runner/goose.go",
+        "internal/runner/migrate.go",
+        "internal/runner/dbmate.go"
+      ],
+      "type": "code",
+      "passes": false,
+      "status": "todo",
+      "priority": 11,
+      "note": "Rationale: a validator that can't read a team's migrations doesn't get adopted, whatever its findings. Size: M. Success metric: share of validate runs per runner. Prisma, Drizzle and Alembic remain CR2-T23's decision."
+    },
+    {
+      "id": "LEAP-012",
+      "title": "Executed rollback rehearsal: apply up, then down, and verify the schema returns and the rollback is itself safe",
+      "description": "RS-REVERSE (P5-T2) reasons about reversibility from the SQL text. For runners with down migrations (goose, golang-migrate, dbmate from LEAP-011, plus rawsql pairs), validate --rollback applies the up half, then the down half, on the hydrated database. It reports whether the down half runs at all, whether the resulting schema matches the pre-migration catalog, and the lock and duration cost of the rollback itself at fixture scale. A rollback that takes ACCESS EXCLUSIVE for minutes is not a rollback plan.",
+      "depends_on": [
+        "LEAP-011",
+        "P5-T2"
+      ],
+      "spec_refs": [
+        "PRD §10 (RS-REVERSE)",
+        "RFC §7.4"
+      ],
+      "acceptance_criteria": [
+        "validate --rollback applies up then down in one disposable database and diffs the catalog against the pre-up snapshot using the existing plan diff code.",
+        "New RS-REVERSE codes report a down half that fails to apply (with SQLSTATE), a schema mismatch after down (naming the objects), and the rollback's own lock findings, each with mandatory remediation.",
+        "Data loss already reported by RS-REVERSE-001/002 is not double-reported.",
+        "Corpus cases cover a clean round trip, a down half that errors, and a down half that leaves a stray index."
+      ],
+      "verification": [
+        "go test ./internal/findings/... ./internal/validate/..."
+      ],
+      "artifacts": [
+        "internal/validate/rollback.go",
+        "internal/findings/reverse.go"
+      ],
+      "type": "code/asset",
+      "passes": false,
+      "status": "todo",
+      "priority": 12,
+      "note": "Rationale: reversibility linting is common; running the down migration against production shape is not. Size: M. Success metric: rollback findings per 100 validates on runners that have down migrations."
+    },
+    {
+      "id": "LEAP-013",
+      "title": "Local policy-as-code: rowshape.policy.yaml with per-table tiers, applied after validate",
+      "description": "Teams want to write 'no ACCESS EXCLUSIVE over 5s on tier-1 tables' once and have every surface enforce it. A versioned policy file is evaluated after validate and never gates validate itself. It resolves CR2-T12's open decision (rowshape.toml is written and read by nothing) and is the surface P5-T10's approval gates would later sign. pgfence offers one --max-risk threshold in the open tool and keeps shared policies inside a private governance program.",
+      "depends_on": [
+        "CR2-T12"
+      ],
+      "spec_refs": [
+        "PRD §8.4 (never gate validate)",
+        "INV-NEVER-GATE-VALIDATE",
+        "CR2-T12"
+      ],
+      "acceptance_criteria": [
+        "A policy JSON Schema is published under fixture-spec/schema with a parser in internal/policy.",
+        "Rules support table globs, tiers, a maximum duration bucket per lock mode, banned finding codes and required remediation acknowledgement.",
+        "Violations are reported as their own findings referencing the rule, and map onto the existing 0/1/2/3 exit codes with no new codes.",
+        "The CLI, validate_migration and action.yml read the same policy with documented precedence, which closes CR2-T12.",
+        "init writes a commented starter policy in place of the inert rowshape.toml.",
+        "Tests cover a policy that tightens a WARN to a FAIL, and a malformed policy that is refused with exit 3, never ignored."
+      ],
+      "verification": [
+        "go test ./internal/policy/... ./cmd/... ./cmd/mcp/..."
+      ],
+      "artifacts": [
+        "internal/policy/",
+        "fixture-spec/schema/rowshape.policy.schema.json",
+        "cmd/init.go"
+      ],
+      "type": "code",
+      "passes": false,
+      "status": "todo",
+      "priority": 13,
+      "note": "Competitive rationale: pgfence's open tool exposes a single CI risk threshold; shared policies sit in its design-partner governance layer (https://pgfence.pages.dev/). Size: M. Success metric: share of repos with a committed policy."
+    },
+    {
+      "id": "LEAP-014",
+      "title": "Public migration-safety benchmark: tools and agents scored against the Rowshape corpus",
+      "description": "Rowshape defines the category metric by publishing the benchmark everyone else is measured against. tools/bench runs the corpus through installed competitors and through LLMs asked whether a migration is safe, then publishes precision and recall per hazard family. Once CR5-T3's live trace runner exists, it adds an agent track: agents writing migrations with and without Rowshape's MCP tools, scored by the existing eval/agentrule scorer. Rule counts are the only comparison the category publishes today.",
+      "depends_on": [
+        "P2-T1",
+        "CR5-T3",
+        "P4-T8"
+      ],
+      "spec_refs": [
+        "PRD §12 (corpus)",
+        "PRD §15 (the bet is the loop)"
+      ],
+      "acceptance_criteria": [
+        "tools/bench adapters shell out to squawk, pgfence, migrationpilot and eugene at versions pinned in a lockfile. A missing tool is reported as not-run, never scored 0.",
+        "Ground truth is corpus/cases/*/expected.json. Each tool's output maps to hazard families through a declared table, and unmapped output is counted and listed as unclassified.",
+        "LLM runs use a fixed model id and temperature, are cached by input hash and record cost.",
+        "Rowshape is scored by the same harness with no special path.",
+        "The agent track reports unsafe-migration-shipped rate, PASS rate and median turns per agent and condition, and includes a control proving the harness detects an unsafe migration when the tools are absent.",
+        "A generated docs-site /benchmark page publishes method, versions, date and raw results; CI fails if it is hand-edited."
+      ],
+      "verification": [
+        "go test ./tools/bench/...",
+        "Drift check on the generated page"
+      ],
+      "artifacts": [
+        "tools/bench/",
+        "docs-site/src/content/docs/benchmark/"
+      ],
+      "type": "code/asset",
+      "passes": false,
+      "status": "todo",
+      "priority": 14,
+      "note": "Rationale: absorbs the drafted agent benchmark (LEAP-019), whose live runner is CR5-T3's open half. Size: M (tool track), L with the agent track. Success metric: backlinks to /benchmark and competitor-submitted adapters."
+    },
+    {
+      "id": "LEAP-015",
+      "title": "Fixture freshness loop: fixture age in every verdict and a scheduled refresh workflow that opens a PR",
+      "description": "A fixture pulled once goes stale, its verdicts quietly lose meaning, and that is the main churn risk in Rowshape's model. The fixture already records generated_at. Every verdict gains fixture age and a confidence-capping WARN past a threshold. `init --refresh-workflow` writes a scheduled GitHub workflow that re-pulls from a read-only replica and opens a PR only when the digest changed, with a value-free summary of how the shape moved. It is the free on-ramp to P5-T11 drift detection.",
+      "depends_on": [
+        "P1-T6",
+        "P2-T15"
+      ],
+      "spec_refs": [
+        "RFC §7.4",
+        "INV-NO-ROWS",
+        "PRD §8.4 (drift)"
+      ],
+      "acceptance_criteria": [
+        "verdict.Result gains fixture_age_days computed from generated_at, and a new RS-FIXTURE-001 (stale fixture) is registered with a page generated by tools/genfindings.",
+        "The threshold defaults to 30 days, is overridable by flag, and caps confidence. It is never FAIL.",
+        "`rowshape init --refresh-workflow` writes a cron workflow running `rowshape pull` that opens a PR only when the fixture digest changed.",
+        "`rowshape verify` gains a Markdown summary of the shape diff (row-count buckets, new columns, skew changes) for the PR body.",
+        "A test runs fixture.Leaks-equivalent checks over the generated PR body.",
+        "No network call is added beyond the user's own database and GitHub."
+      ],
+      "verification": [
+        "go test ./internal/verdict/... ./cmd/..."
+      ],
+      "artifacts": [
+        "internal/verdict/",
+        "cmd/init.go",
+        "cmd/verify.go"
+      ],
+      "type": "code",
+      "passes": false,
+      "status": "todo",
+      "priority": 15,
+      "note": "Rationale: pgfence relies on an ad-hoc JSON stats snapshot with no freshness signal (https://pgfence.pages.dev/). Size: M. Success metric: share of active repos with a fixture under 30 days old."
+    },
+    {
+      "id": "LEAP-016",
+      "title": "Conformant emitter program: reference emitters and a standalone conformance runner",
+      "description": "PRD §3 makes the spec the position: anyone can emit a fixture. Atlas or pgfence could absorb a validator, but not an ecosystem. conformance.CheckEmitterYAML is already callable from external modules. This story ships it as a standalone runner, adds a pg_dump-adjacent `rowshape-emit` for existing backup jobs plus at least one ORM emitter, and publishes the criteria for claiming conformance.",
+      "depends_on": [
+        "P0-T2",
+        "P2-T16"
+      ],
+      "spec_refs": [
+        "PRD §3",
+        "RFC §6.1, §8",
+        "INV-ONE-CANONICAL-FORM"
+      ],
+      "acceptance_criteria": [
+        "A standalone conformance binary under tools/ checks any emitter's YAML and prints a machine-readable report.",
+        "A `rowshape emit` mode reads a running database with pull's catalog-only and blast-radius guarantees and is documented for cron and backup hooks.",
+        "One npm-packaged ORM emitter (Prisma generator or drizzle-kit plugin) under npm/ passes the conformance runner in CI.",
+        "docs-site/src/content/docs/spec gains an emitters page with the conformance criteria.",
+        "RFC-0001 records the emitter-claim process."
+      ],
+      "verification": [
+        "Conformance workflow runs every emitter across the PG matrix"
+      ],
+      "artifacts": [
+        "tools/conformance/",
+        "npm/",
+        "docs-site/src/content/docs/spec/emitters.md",
+        "RFC-0001-rowshape-fixture-spec.md"
+      ],
+      "type": "code/spec",
+      "passes": false,
+      "status": "todo",
+      "priority": 16,
+      "note": "Rationale: pgfence's table-size input is an ad-hoc JSON snapshot, not a spec (https://pgfence.pages.dev/). Size: L. Success metric: third-party emitters claiming conformance."
+    },
+    {
+      "id": "LEAP-017",
+      "title": "Embeddable Go library (pkg/rowshape) so platforms and MCP servers run the check in-process",
+      "description": "If provider MCP servers build their own pre-apply checks, a separate tool gets harder to justify. A semver-stable Go API turns that into distribution. CR3-T10 already made the analyzer registry concurrency-safe. What remains is the in-place fixture mutation in MarkExact and ApplyPrivacy, documented there as a single-owner contract that needs a deep copy.",
+      "depends_on": [
+        "CR3-T10",
+        "P0-T4"
+      ],
+      "spec_refs": [
+        "PRD §9 (one implementation shared by CLI and API)",
+        "INV-ONE-CANONICAL-FORM"
+      ],
+      "acceptance_criteria": [
+        "pkg/rowshape exposes Pull, Hydrate and Validate with option structs and re-exports verdict types; internal packages stay internal.",
+        "fixture.Clone deep-copies nested maps, slices and *Fact pointers, and MarkExact and ApplyPrivacy operate on a clone. A -race test runs 8 validations over one parsed fixture in parallel.",
+        "An apidiff CI check fails a minor release that breaks pkg/rowshape.",
+        "examples/embed shows a minimal MCP server built on pkg/rowshape.",
+        "Verdicts carry engine: rowshape/<version>."
+      ],
+      "verification": [
+        "go test -race ./pkg/... ./internal/fixture/..."
+      ],
+      "artifacts": [
+        "pkg/rowshape/",
+        "internal/fixture/clone.go",
+        "examples/embed/"
+      ],
+      "type": "code",
+      "passes": false,
+      "status": "todo",
+      "priority": 17,
+      "note": "Rationale: makes Rowshape the engine inside other tools instead of a competitor to them. Size: M. Success metric: pkg.go.dev imported-by count."
+    },
+    {
+      "id": "LEAP-018",
+      "title": "rowshape lsp and a VS Code extension: execution-backed diagnostics on save",
+      "description": "Squawk ships an LSP (squawk server) and pgfence ships a VS Code extension with lightbulb quick fixes, both static. Rowshape's editor surface reports lock mode, estimated duration against the committed fixture, and the LEAP-001 verified rewrite as a code action. A warm hydrated database between saves keeps feedback in seconds.",
+      "depends_on": [
+        "LEAP-001",
+        "LEAP-003"
+      ],
+      "spec_refs": [
+        "PRD §10",
+        "INV-DETERMINISM"
+      ],
+      "acceptance_criteria": [
+        "`rowshape lsp` speaks LSP over stdio, and diagnostics map findings to statement ranges via internal/sqlkind.",
+        "Warm mode reuses one hydrated database and resets it from a template-database clone. A test asserts the second validation is faster than the first.",
+        "A code action applies the LEAP-001 rewrite when one exists.",
+        "editors/vscode resolves the binary from PATH or the npm wrapper and is published to the Marketplace and Open VSX.",
+        "Without Docker or the embedded backend, the server emits one diagnostic, not one per keystroke."
+      ],
+      "verification": [
+        "go test ./internal/lsp/...",
+        "Extension smoke test in CI"
+      ],
+      "artifacts": [
+        "cmd/lsp.go",
+        "internal/lsp/",
+        "editors/vscode/"
+      ],
+      "type": "code",
+      "passes": false,
+      "status": "todo",
+      "priority": 18,
+      "note": "Competitive rationale: Squawk LSP and VS Code extension (https://github.com/sbdchd/squawk); pgfence VS Code extension with static quick fixes (https://pgfence.pages.dev/). Size: L. Success metric: Marketplace plus Open VSX installs."
+    },
+    {
+      "id": "LEAP-019",
+      "title": "SARIF, GitLab Code Quality and JUnit outputs beyond GitHub Actions",
+      "description": "Rowshape renders only into GitHub today (action.yml plus internal/annotate). Squawk already ships a gitlab reporter alongside tty, gcc and json, and has no SARIF output. SARIF puts findings into GitHub code scanning and any SARIF-aware tool. A GitLab Code Quality report and a GitLab CI component reach the shops where Atlas and Bytebase sell.",
+      "depends_on": [
+        "P4-T2"
+      ],
+      "spec_refs": [
+        "PRD §10 (finding location)",
+        "INV-VERDICT-SHAPE"
+      ],
+      "acceptance_criteria": [
+        "`rowshape annotate --format sarif|gitlab-codequality|junit` is added in cmd/annotate.go, with renderers in internal/annotate built from the Verdict struct.",
+        "SARIF output validates against the 2.1.0 schema in a unit test, and each result carries the finding code, a helpUri to rowshape.com/findings/<code> and the file location.",
+        "GitLab fingerprints derive from finding code, file and statement index, and are stable across runs.",
+        "templates/gitlab/rowshape.yml is exercised by a smoke workflow.",
+        "docs-site guides/ci.md documents each platform.",
+        "The exit-code contract 0/1/2/3 is unchanged for every format."
+      ],
+      "verification": [
+        "go test ./internal/annotate/... ./cmd/..."
+      ],
+      "artifacts": [
+        "internal/annotate/sarif.go",
+        "internal/annotate/gitlab.go",
+        "templates/gitlab/rowshape.yml"
+      ],
+      "type": "code",
+      "passes": false,
+      "status": "todo",
+      "priority": 19,
+      "note": "Competitive rationale: Squawk reporters tty, gcc, json, gitlab (https://github.com/sbdchd/squawk). Size: M. Success metric: share of installs from non-GitHub CI."
+    },
+    {
+      "id": "LEAP-020",
+      "title": "Zero-install browser playground: paste a fixture and a migration, get a capped verdict client-side",
+      "description": "Fixtures hold no rows and are safe to paste. A rowshape.com playground runs the analyzers compiled to WASM against PGlite (Postgres compiled to WASM, one major only) on a capped sample hydrated from the pasted fixture. It is a zero-install top of funnel with no server, so it avoids the P5-T8 infrastructure. Squawk's playground lints SQL in the browser with no data. Rowshape's would show findings that depend on shape, honestly capped.",
+      "depends_on": [
+        "P4-T3",
+        "SEO-17"
+      ],
+      "spec_refs": [
+        "RFC §7.4",
+        "INV-NO-ROWS",
+        "INV-CONFIDENCE-CAPPING"
+      ],
+      "acceptance_criteria": [
+        "A js/wasm build of internal/findings, internal/estimate and the capture/verdict path compiles in CI, with Docker and network code excluded by build tags.",
+        "The page loads PGlite at a pinned version, hydrates a capped sample (default 10k rows per table) and runs the migration.",
+        "Playground verdicts are capped at estimated, state the PGlite major, and say so on screen.",
+        "A test asserts no request leaves the browser other than static assets.",
+        "Output links to install with the exact `rowshape validate` command for the user's own fixture.",
+        "The page works at phone width and states a message on browsers without WASM."
+      ],
+      "verification": [
+        "WASM build job",
+        "Playwright test asserting no non-asset requests"
+      ],
+      "artifacts": [
+        "docs-site/src/pages/playground/",
+        "cmd/wasm/"
+      ],
+      "type": "code",
+      "passes": false,
+      "status": "todo",
+      "priority": 20,
+      "note": "Competitive rationale: Squawk's WASM playground at play.squawkhq.com checks SQL locally with no data (https://github.com/sbdchd/squawk). Size: XL. Success metric: playground-to-install conversion."
+    }
+  ]
+}
