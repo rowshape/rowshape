@@ -11,7 +11,16 @@
 //  - already "RS - <something>": keep it
 //  - set by hand (/rename, claude -n): keep the words, add the prefix
 // A slash command says nothing about the task, so it waits for a real prompt.
+// A prompt starting with "<" is one Claude Code wrote (a <task-notification>
+// when a background agent finishes, command output), never the task: on
+// 2026-11-13 one retitled a GradeThread session "GT - a7d977ee059242b03 toolu_...".
+// A session is titled from a prompt at most ONCE (a marker per session id in the
+// temp dir), because the hook input may omit session_title, and without the
+// marker every later prompt would look like the first.
 
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const PREFIX = "RS - ";
@@ -41,8 +50,22 @@ export function withPrefix(text) {
   return PREFIX + (d || REPO);
 }
 
+/** Which sessions were already titled from a prompt: one empty file per session id. */
+export function markerStore(dir = join(tmpdir(), "claude-session-titles")) {
+  const file = (id) => join(dir, String(id).replace(/[^A-Za-z0-9-]/g, "_"));
+  return {
+    has(id) {
+      try { return existsSync(file(id)); } catch { return false; }
+    },
+    /** False when the marker could not be written; that costs one extra retitle, never a blocked prompt. */
+    add(id) {
+      try { mkdirSync(dir, { recursive: true }); writeFileSync(file(id), ""); return true; } catch { return false; }
+    },
+  };
+}
+
 /** The title to set, or null when the session should be left alone. */
-export function titleFor(input, env = process.env) {
+export function titleFor(input, env = process.env, titled = markerStore()) {
   if (env.CLAUDE_CODE_REMOTE === "true") return null;
   const current = String(input?.session_title ?? "").trim();
   const bare = PREFIX + REPO;
@@ -52,9 +75,13 @@ export function titleFor(input, env = process.env) {
     return t === current ? null : t;
   }
   const prompt = String(input?.prompt ?? "").trim();
-  if (!prompt || prompt.startsWith("/")) return null;
+  if (!prompt || prompt.startsWith("/") || prompt.startsWith("<")) return null;
+  const id = input?.session_id ? String(input.session_id) : "";
+  if (id && titled.has(id)) return null;
   const t = withPrefix(prompt);
-  return t === current ? null : t;
+  if (t === current) return null;
+  if (id) titled.add(id);
+  return t;
 }
 
 async function main() {
